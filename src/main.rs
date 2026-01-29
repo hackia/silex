@@ -2,7 +2,14 @@ use clap::Command;
 use inquire::Text;
 use std::io::Error;
 use std::path::MAIN_SEPARATOR_STR;
-use std::{env::current_dir, fs::create_dir_all, path::Path};
+use std::{fs::create_dir_all, path::Path};
+
+use crate::db::SILEX_INIT;
+use crate::utils::ok;
+
+pub mod utils;
+
+pub mod db;
 
 fn cli() -> Command {
     Command::new("silex")
@@ -33,10 +40,15 @@ fn new_project() -> Result<(), Error> {
     create_dir_all(format!("{project}{MAIN_SEPARATOR_STR}.silex{MAIN_SEPARATOR_STR}db").as_str())
         .expect("failed to create the .silex directory");
 
-    if conn(project.as_str()).is_ok() {
+    if conn(project.as_str())
+        .expect("failed to get the connexion")
+        .execute(SILEX_INIT)
+        .is_ok()
+    {
+        ok("project created successsfully");
         Ok(())
     } else {
-        Err(Error::other("failed to create the db"))
+        Err(Error::other("failed to create the sqlite database"))
     }
 }
 

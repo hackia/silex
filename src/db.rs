@@ -1,9 +1,4 @@
-# silex
-
-```sqlite
--- 1. BLOBS : Le stockage du contenu brut
--- Contrairement à Git, on peut stocker des métadonnées ici (mime_type).
-CREATE TABLE blobs (
+pub const SILEX_INIT : &str = "CREATE TABLE blobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     hash TEXT UNIQUE NOT NULL,      -- Hash SHA-256 du contenu pour déduplication
     content BLOB,                   -- Le contenu réel (peut être zlib compressé)
@@ -11,9 +6,6 @@ CREATE TABLE blobs (
     mime_type TEXT                  -- Utile pour une UI web rapide sans analyser le binaire
 );
 
--- 2. ASSETS : L'identité persistante du fichier
--- C'est la grande différence avec Git. Un fichier a un ID unique.
--- Si on renomme "main.c" en "core.c", l'asset_id reste le même.
 CREATE TABLE assets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT UNIQUE NOT NULL,      -- Identifiant unique universel de l'asset
@@ -21,8 +13,6 @@ CREATE TABLE assets (
     creator_id INTEGER              -- Qui a introduit ce fichier pour la première fois
 );
 
--- 3. COMMITS : L'événement de changement
--- Structure linéaire ou graph (DAG) classique, mais stockée relationnellement.
 CREATE TABLE commits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     hash TEXT UNIQUE NOT NULL,       -- Hash calculé sur les métadonnées + parent
@@ -33,9 +23,6 @@ CREATE TABLE commits (
     FOREIGN KEY(parent_hash) REFERENCES commits(hash)
 );
 
--- 4. MANIFEST (La table pivot centrale)
--- Git utilise des objets "Tree" imbriqués. Ici, nous utilisons une table plate.
--- Pour reconstruire un commit, on fait simplement un SELECT sur cette table.
 CREATE TABLE manifest (
     commit_id INTEGER NOT NULL,
     asset_id INTEGER NOT NULL,
@@ -50,7 +37,6 @@ CREATE TABLE manifest (
     FOREIGN KEY (blob_id) REFERENCES blobs(id)
 );
 
--- 5. BRANCHES : Pointeurs nommés (heads)
 CREATE TABLE branches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
@@ -58,12 +44,10 @@ CREATE TABLE branches (
     FOREIGN KEY (head_commit_id) REFERENCES commits(id)
 );
 
--- 6. TAGS : Étiquettes immuables
 CREATE TABLE tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     commit_id INTEGER NOT NULL,
     description TEXT,
     FOREIGN KEY (commit_id) REFERENCES commits(id)
-);
-```
+);";
