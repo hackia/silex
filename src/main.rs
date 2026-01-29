@@ -1,4 +1,4 @@
-use clap::Command;
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use inquire::Text;
 use std::fs::File;
 use std::io::Error;
@@ -19,8 +19,42 @@ fn cli() -> Command {
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand(Command::new("new").about("create a new silex project"))
         .subcommand(Command::new("status").about("show changes in working directory"))
+        .subcommand(Command::new("log").about("Show commit logs"))
+        .subcommand(
+            Command::new("commit")
+                .about("Record changes to the repository")
+                .arg(
+                    Arg::new("message")
+                        .short('m')
+                        .long("message")
+                        .help("Description of the changes")
+                        .required(true)
+                        .action(ArgAction::Set),
+                ),
+        )
 }
 
+fn perform_commit(args: &ArgMatches) -> Result<(), Error> {
+    let current_dir = std::env::current_dir()?;
+    let current_dir_str = current_dir.to_str().unwrap();
+
+    if !Path::new(".silex").exists() {
+        return Err(Error::other("Not a silex repository."));
+    }
+
+    let connection =
+        connect_silex(Path::new(current_dir_str)).map_err(|e| Error::other(e.to_string()))?;
+
+    // On récupère le message depuis les arguments CLI
+    let message = args.get_one::<String>("message").unwrap();
+
+    // Pour l'instant on hardcode l'auteur, plus tard on le lira dans `config`
+    let author = "Saigo Ekitae";
+
+    vcs::commit(&connection, message, author).map_err(|e| Error::other(e.to_string()))?;
+
+    Ok(())
+}
 pub fn check_status() -> Result<(), Error> {
     let current_dir = std::env::current_dir()?;
     let current_dir_str = current_dir.to_str().unwrap();
@@ -78,6 +112,15 @@ fn main() -> Result<(), Error> {
         }
         Some(("status", _)) => {
             return check_status();
+        }
+        Some(("commit", sub_matches)) => {
+            return perform_commit(sub_matches);
+        }
+        Some(("log", _)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
+            return vcs::log(&conn).map_err(|e| Error::other(e.to_string()));
         }
         _ => {
             args.clone().print_help().expect("failed to print the help");

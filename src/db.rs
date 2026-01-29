@@ -1,7 +1,6 @@
 use chrono::Datelike;
-use sqlite::{Connection, State};
+use sqlite::{Connection, Error, State};
 use std::fs::create_dir_all;
-use std::io::{Error, ErrorKind};
 use std::path::Path;
 
 pub const SILEX_INIT: &str = "
@@ -77,21 +76,14 @@ pub const SILEX_INIT: &str = "
 
 pub fn get_current_branch(conn: &Connection) -> Result<String, Error> {
     let query = "SELECT value FROM config WHERE key = 'current_branch'";
-    let mut statement = conn
-        .prepare(query)
-        .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+    let mut statement = conn.prepare(query)?;
 
     if let Ok(State::Row) = statement.next() {
-        let branch_name: String = statement
-            .read("value")
-            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+        let branch_name: String = statement.read("value")?;
         Ok(branch_name)
     } else {
         // Fallback si la config est cassée, mais ça ne devrait pas arriver
-        Err(Error::new(
-            ErrorKind::Other,
-            "FATAL: Could not determine current branch.",
-        ))
+        Ok(String::from("main"))
     }
 }
 
