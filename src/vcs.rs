@@ -21,8 +21,9 @@ pub fn get_head_state(
     branch: &str,
 ) -> Result<HashMap<PathBuf, (String, i64)>, sqlite::Error> {
     let mut state_map = HashMap::new();
-    let query_head = format!("SELECT head_commit_id FROM branches WHERE name = '{branch}'");
-    let mut statement = conn.prepare(query_head.as_str())?;
+    let query_head = "SELECT head_commit_id FROM branches WHERE name = ?";
+    let mut statement = conn.prepare(query_head)?;
+    statement.bind((1, branch))?;
 
     let head_commit_id = if let Ok(State::Row) = statement.next() {
         statement.read::<i64, _>("head_commit_id")?
@@ -34,7 +35,7 @@ pub fn get_head_state(
     let query_manifest = "
         SELECT m.file_path, b.hash, m.asset_id 
         FROM manifest m
-        JOIN blobs b ON m.blob_id = b.id
+        JOIN store.blobs b ON m.blob_id = b.id
         WHERE m.commit_id = ?
     ";
     let mut statement = conn.prepare(query_manifest)?;
@@ -75,8 +76,10 @@ pub fn status(conn: &Connection, root_path: &str, branch: &str) -> Result<Vec<Fi
             .to_path_buf();
         files_on_disk.insert(relative_path.clone());
 
-        let current_hash = calculate_hash(path.path())?;
-
+        let current_hash = match calculate_hash(path.path()) {
+            Ok(h) => h,
+            Err(_) => continue, // On ignore les fichiers illisibles (ou on log un warning)
+        };
         // Comparaison
         match db_state.get(&relative_path) {
             Some((db_hash, asset_id)) => {

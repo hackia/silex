@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 blake3 = "1.8.3"
+chrono = "0.4.43"
 clap = "4.5.55"
 hex = "0.4.3"
 ignore = "0.4.25"

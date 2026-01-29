@@ -3,9 +3,9 @@ use inquire::Text;
 use std::fs::File;
 use std::io::Error;
 use std::path::MAIN_SEPARATOR_STR;
-use std::{fs::create_dir_all, path::Path};
+use std::path::Path;
 
-use crate::db::{SILEX_INIT, get_current_branch};
+use crate::db::{SILEX_INIT, connect_silex, get_current_branch};
 use crate::utils::ok;
 
 pub mod db;
@@ -21,13 +21,7 @@ fn cli() -> Command {
         .subcommand(Command::new("status").about("show changes in working directory"))
 }
 
-fn conn(p: &str) -> Result<sqlite::Connection, sqlite::Error> {
-    sqlite::open(format!(
-        "{p}{MAIN_SEPARATOR_STR}.silex{MAIN_SEPARATOR_STR}db{MAIN_SEPARATOR_STR}silex.db"
-    ))
-}
-
-fn check_status() -> Result<(), Error> {
+pub fn check_status() -> Result<(), Error> {
     let current_dir = std::env::current_dir()?;
     let current_dir_str = current_dir.to_str().unwrap();
     if !Path::new(&format!("{MAIN_SEPARATOR_STR}.silex")).exists() && !Path::new(".silex").exists()
@@ -35,7 +29,8 @@ fn check_status() -> Result<(), Error> {
         return Err(Error::other("Not a silex repository."));
     }
 
-    let connection = conn(current_dir_str).map_err(|e| Error::other(e.to_string()))?;
+    let connection =
+        connect_silex(Path::new(current_dir_str)).map_err(|e| Error::other(e.to_string()))?;
     vcs::status(
         &connection,
         current_dir_str,
@@ -59,10 +54,7 @@ fn new_project() -> Result<(), Error> {
             project.clear();
         }
     }
-    create_dir_all(format!("{project}{MAIN_SEPARATOR_STR}.silex{MAIN_SEPARATOR_STR}db").as_str())
-        .expect("failed to create the .silex directory");
-
-    if conn(project.as_str())
+    if connect_silex(Path::new(project.as_str()))
         .expect("failed to get the connexion")
         .execute(SILEX_INIT)
         .is_ok()
