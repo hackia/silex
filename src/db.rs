@@ -1,3 +1,6 @@
+use sqlite::{Connection, State};
+use std::io::{Error, ErrorKind};
+
 pub const SILEX_INIT : &str = "CREATE TABLE blobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     hash TEXT UNIQUE NOT NULL,      -- Hash SHA-256 du contenu pour déduplication
@@ -50,4 +53,31 @@ CREATE TABLE tags (
     commit_id INTEGER NOT NULL,
     description TEXT,
     FOREIGN KEY (commit_id) REFERENCES commits(id)
-);";
+);
+CREATE TABLE config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+INSERT INTO config (key, value) VALUES ('current_branch', 'main');
+";
+
+pub fn get_current_branch(conn: &Connection) -> Result<String, Error> {
+    let query = "SELECT value FROM config WHERE key = 'current_branch'";
+    let mut statement = conn
+        .prepare(query)
+        .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+
+    if let Ok(State::Row) = statement.next() {
+        let branch_name: String = statement
+            .read("value")
+            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+        Ok(branch_name)
+    } else {
+        // Fallback si la config est cassée, mais ça ne devrait pas arriver
+        Err(Error::new(
+            ErrorKind::Other,
+            "FATAL: Could not determine current branch.",
+        ))
+    }
+}
