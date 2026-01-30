@@ -5,7 +5,10 @@ use std::fs::File;
 use std::io::Error;
 use std::path::MAIN_SEPARATOR_STR;
 use std::path::Path;
+use tabled::grid::util::string::get_lines;
 
+use crate::chat::list_messages;
+use crate::chat::send_message;
 use crate::db::{SILEX_INIT, connect_silex, get_current_branch};
 use crate::utils::ok;
 
@@ -45,6 +48,19 @@ fn cli() -> Command {
                         .required(true)
                         .action(ArgAction::Set),
                 ),
+        )
+        .subcommand(
+            Command::new("chat")
+                .about("chat")
+                .subcommand(
+                    Command::new("send").arg(
+                        Arg::new("message")
+                            .required(true)
+                            .action(ArgAction::Set)
+                            .help("message to send"),
+                    ),
+                )
+                .subcommand(Command::new("list").about("list messages")),
         )
         .subcommand(
             Command::new("sync")
@@ -127,7 +143,6 @@ fn perform_commit(args: &ArgMatches) -> Result<(), Error> {
     if !Path::new(".silex").exists() {
         return Err(Error::other("Not a silex repository."));
     }
-
     let connection =
         connect_silex(Path::new(current_dir_str)).map_err(|e| Error::other(e.to_string()))?;
 
@@ -195,6 +210,38 @@ fn main() -> Result<(), Error> {
     match app.subcommand() {
         Some(("new", _)) => new_project(),
         Some(("status", _)) => check_status(),
+        Some(("chat", sub)) => {
+            let sender = std::env::var("USER").expect("USER must be defined");
+            let conn = connect_silex(Path::new(".")).expect("failed to connect to the database");
+            match sub.subcommand() {
+                Some(("send", arg)) => {
+                    let message = arg
+                        .get_one::<String>("message")
+                        .expect("failed to get message");
+                    send_message(&conn, sender.as_str(), message.as_str())
+                        .expect("failed to send message");
+                    Ok(())
+                }
+                Some(("list", _)) => match list_messages(&conn) {
+                    Ok(messages) => {
+                        if messages.is_empty() {
+                            ok("chat messages is empty.");
+                            Ok(())
+                        } else {
+                            for message in &messages {
+                                println!(
+                                    "{}",
+                                    format_args!("\n{}\n{}\n", message.content, message.sender)
+                                );
+                            }
+                            Ok(())
+                        }
+                    }
+                    Err(_) => Err(Error::other("Failed to read messages")),
+                },
+                _ => Ok(()),
+            }
+        }
         Some(("commit", sub_matches)) => {
             if run_hooks().is_ok() && perform_commit(sub_matches).is_ok() {
                 Ok(())
