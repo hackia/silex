@@ -1,123 +1,122 @@
-# Silex
+# Silex 🪨
 
-**An Asset-Centric Version Control System powered by SQLite.**
+[![Rust](https://img.shields.io/badge/built_with-Rust-dca282.svg)](https://www.rust-lang.org/)
+[![SQLite](https://img.shields.io/badge/powered_by-SQLite-003B57.svg)](https://sqlite.org/)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL_v3-blue.svg)](LICENSE)
 
-> ⚠️ **Status:** Proof of Concept / Experimental.
+**Plus qu'un VCS : Une Forge de Développement Locale.**
 
-Silex is a novel Version Control System (VCS) written in Rust. Unlike Git, which tracks snapshots of file system trees, Silex tracks **File Assets**. It leverages the relational power of SQLite to maintain the history, identity, and metadata of your project files.
+> ⚠️ **Status:** Alpha / Experimental.
 
-## The Philosophy: Asset vs. Snapshot
+Silex est un système de contrôle de version nouvelle génération écrit en Rust. Contrairement à Git qui ne voit que des "snapshots" de fichiers, Silex suit des **Assets** et intègre directement dans votre dépôt les outils de gestion de projet (Chat, Todo, Analytics).
 
-The dominant philosophy in modern VCS (like Git) is "Content Addressable Storage". If you rename a file, Git sees a deletion and a creation, then guesses it's a rename based on content similarity.
+Le tout est propulsé par **SQLite**, ce qui rend votre historique et vos métadonnées 100% requêtables via SQL.
 
-**Silex takes a different approach: Identity.**
+## 🚀 Pourquoi Silex ?
 
-1. **File Identity (Assets):** Every file introduced to the system gets a unique UUID (`asset_id`). If you rename `main.rs` to `application.rs`, the `asset_id` remains the same. Rename tracking is explicit and native, not a heuristic.
-2. **Flat Manifests:** Instead of recursive Merkle Trees (Git Trees), a commit in Silex is defined by a flat "Manifest" table. Getting the state of a project at `commit X` is a simple SQL `SELECT`.
-3. **Relational Metadata:** Since the history is stored in SQLite, you can perform complex queries on your repository (e.g., *"Find all files larger than 1MB modified by user X between 2023 and 2024"*).
+### 1. Philosophie "Asset-Centric"
+Si vous renommez `main.rs` en `app.rs`, Git devine qu'il s'agit d'un renommage. Silex le **sait**. Chaque fichier possède un UUID unique (`asset_id`). L'historique suit l'identité du fichier, pas juste son chemin.
 
-## Architecture & Schema
+### 2. La "Forge" Intégrée
+Pourquoi changer de fenêtre pour discuter ou noter une tâche ? Silex intègre ces outils directement dans le terminal, stockés localement dans le dépôt.
+* **Messagerie Éphémère** : Laissez des notes aux collègues (ou à vous-même) qui s'autodétruisent à 20h00.
+* **Todo List** : Gérez les tâches techniques directement là où se trouve le code.
+* **Analytics** : Qui modifie quoi ? Quels fichiers sont liés ? Tout est dans la base SQL.
 
-The core of Silex relies on a relational model stored in `.silex/db/silex.db`.
-
-### 1. Blobs (Content)
-
-Stores the raw binary content. De-duplicated via SHA-256 hashing.
-
+### 3. Puissance SQL
+L'état de votre projet n'est pas caché dans des fichiers binaires obscurs. C'est une base de données.
 ```sql
-CREATE TABLE blobs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    hash TEXT UNIQUE NOT NULL,      -- SHA-256 of content
-    content BLOB,                   -- Raw data (optionally compressed)
-    size INTEGER NOT NULL,
-    mime_type TEXT                  -- Metadata for quick UI rendering
-);
+-- Exemple : Trouver tous les fichiers modifiés par 'Saigo' pesant plus de 1MB
+SELECT * FROM files WHERE author = 'Saigo' AND size > 1000000;
 
 ```
 
-### 2. Assets (Identity)
+---
 
-The persistent identity of a file. This ID never changes, even if the file path does.
+## 🛠 Installation
 
-```sql
-CREATE TABLE assets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    uuid TEXT UNIQUE NOT NULL,      -- Universal unique identifier
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    creator_id INTEGER
-);
-
-```
-
-### 3. Commits (Events)
-
-The history graph.
-
-```sql
-CREATE TABLE commits (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    hash TEXT UNIQUE NOT NULL,
-    parent_hash TEXT,               -- NULL for root commit
-    author TEXT NOT NULL,
-    message TEXT NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(parent_hash) REFERENCES commits(hash)
-);
-
-```
-
-### 4. Manifest (The Link)
-
-The pivot table that reconstructs the filesystem state. It links a Commit, an Asset (Identity), and a Blob (Content) to a specific File Path.
-
-```sql
-CREATE TABLE manifest (
-    commit_id INTEGER NOT NULL,
-    asset_id INTEGER NOT NULL,
-    blob_id INTEGER NOT NULL,
-    file_path TEXT NOT NULL,        -- Path can change between commits for the same asset
-    permissions INTEGER DEFAULT 644,
-    PRIMARY KEY (commit_id, asset_id)
-);
-
-```
-
-## Getting Started
-
-### Prerequisites
-
-* Rust (latest stable)
-* `libsqlite3` (usually pre-installed on most unix systems)
-
-### Installation
+Prérequis : `Rust` (dernière version stable) et `libsqlite3`.
 
 ```bash
-git clone https://github.com/hackia/silex
-cd silex
-cargo build --release
-
+cargo install silex
 ```
 
-### Usage
+### alias
 
-Initialize a new Silex repository:
+Recommandé : Créer un alias
 
 ```bash
-# This creates a directory with a .silex/db/silex.db database
-cargo run -- new
+alias sx='silex'
+
+```
+---
+
+## 💻 Utilisation
+
+### Gestion de Version (VCS)
+
+Les classiques, mais en mieux.
+
+```bash
+sx new            # Initialise un nouveau dépôt Silex (et la DB)
+sx status         # Voir les changements
+sx add .          # Stager les fichiers (Assets)
+sx commit -m "feat: initial commit" 
+sx log            # Voir l'historique
 
 ```
 
-*Follow the interactive prompt to name your project.*
+### Outils de Productivité (Nouveautés)
 
-## Roadmap
+#### 💬 Chat Interne (Auto-destructible)
 
-* [x] **Init:** Database structure creation (`silex new`).
-* [ ] **Stage:** Scanning working directory and identifying changed assets.
-* [ ] **Commit:** Writing blobs and manifest entries.
-* [ ] **Log:** Querying the `commits` table.
-* [ ] **Checkout:** Reconstructing files from `blobs` based on `manifest`.
+Idéal pour le "Daily standup" asynchrone ou les infos sensibles. Les messages disparaissent automatiquement à 20h.
 
-## License
+```bash
+sx chat send "Penser à refactoriser le module DB avant ce soir"
+sx chat list      # Affiche les messages non expirés
 
-This project is licensed under the **GNU Affero General Public License v3.0**. See the [LICENSE](https://www.google.com/search?q=LICENSE) file for details.
+```
+
+#### ✅ Todo List
+
+Plus besoin de `TODO:` perdus dans les commentaires du code.
+
+```bash
+sx todo add "Réparer le bug de la date" -u "Saigo" --due "2026-02-01"
+sx todo list      # Affiche un joli tableau des tâches
+sx todo close 42  # Termine la tâche ID 42
+
+```
+
+---
+
+## 🏗 Architecture & Schéma
+
+Le cœur de Silex repose sur deux bases SQLite dans `.silex/db/` :
+
+1. **`store.db`** : Contient les `blobs` (contenu binaire dédupliqué via Blake3).
+2. **`history_YYYY.db`** : Contient les métadonnées (Commits, Manifests, Chat, Todos).
+
+### Tables Principales
+
+* **`commits`** : Graphe des révisions (DAG).
+* **`manifest`** : Table de liaison qui reconstruit le système de fichiers (`commit_id` + `asset_id` + `blob_id`).
+* **`ephemeral_messages`** : Messages avec timestamp d'expiration.
+* **`todos`** : Gestion des tâches avec assignation et dates limites.
+
+---
+
+## 🗺 Roadmap
+
+* [x] **Core:** Structure Database & Init
+* [x] **Productivity:** Chat & Todo System
+* [x] **CLI:** Autocompletion (Fish) & UX with `tabled`
+* [x] **VCS:** Checkout & Restore (Reconstruction des fichiers)
+* [ ] **Sync:** Smart Sync (Diffs SQL uniquement)
+* [ ] **Security:** Signature cryptographique des commits (Ed25519)
+
+## 📄 Licence
+
+Ce projet est sous licence **GNU Affero General Public License v3.0**. Voir le fichier [LICENSE](https://www.google.com/search?q=LICENSE) pour plus de détails.
+
