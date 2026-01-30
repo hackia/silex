@@ -33,6 +33,16 @@ fn cli() -> Command {
                         .action(ArgAction::Set),
                 ),
         )
+        .subcommand(
+            Command::new("restore")
+                .about("Discard changes in working directory")
+                .arg(
+                    Arg::new("path")
+                        .help("The file to restore")
+                        .required(true)
+                        .action(ArgAction::Set),
+                ),
+        )
 }
 
 fn perform_commit(args: &ArgMatches) -> Result<(), Error> {
@@ -128,6 +138,14 @@ fn main() -> Result<(), Error> {
             let conn =
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
             return vcs::diff(&conn).map_err(|e| Error::other(e.to_string()));
+        }
+        Some(("restore", sub_matches)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
+
+            let path = sub_matches.get_one::<String>("path").unwrap();
+            return vcs::restore(&conn, path).map_err(|e| Error::other(e.to_string()));
         }
         _ => {
             args.clone().print_help().expect("failed to print the help");

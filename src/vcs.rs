@@ -25,6 +25,54 @@ pub struct ManifestEntry {
     perm: i64,
 }
 
+// Helper pour récupérer le contenu BRUT (bytes) d'un fichier dans le HEAD
+// C'est vital pour restaurer des images ou des exécutables sans corruption UTF-8
+fn get_blob_bytes(conn: &Connection, branch: &str, path: &Path) -> Result<Option<Vec<u8>>, Error> {
+    let relative_path = path.strip_prefix(".").unwrap_or(path).to_string_lossy();
+
+    let query = "
+        SELECT b.content 
+        FROM branches br
+        JOIN manifest m ON m.commit_id = br.head_commit_id
+        JOIN store.blobs b ON m.blob_id = b.id
+        WHERE br.name = ? AND m.file_path = ?
+    ";
+
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, branch))?;
+    stmt.bind((2, relative_path.as_ref()))?;
+
+    if let Ok(State::Row) = stmt.next() {
+        let content: Vec<u8> = stmt.read("content")?;
+        Ok(Some(content))
+    } else {
+        Ok(None) // Le fichier n'existe pas dans le HEAD
+    }
+}
+
+pub fn restore(conn: &Connection, path_str: &str) -> Result<(), Error> {
+    let path = Path::new(path_str);
+    let branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
+
+    // 1. On cherche le contenu original dans la BDD
+    match get_blob_bytes(conn, &branch, path)? {
+        Some(content) => {
+            // 2. Le fichier existe dans le HEAD, on l'écrase sur le disque
+            std::fs::write(path, content).expect("failed to restore");
+            ok(&format!("Restored '{}' from HEAD.", path.display()));
+        }
+        None => {
+            // 3. Cas particulier : Le fichier n'est pas dans le HEAD (c'est un fichier purement nouveau)
+            // Dans ce cas, 'restore' ne peut rien faire (ou devrait proposer de le supprimer)
+            println!(
+                "\x1b[1;31mError:\x1b[0m File '{}' does not exist in the last commit.",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn diff(conn: &Connection) -> Result<(), Error> {
     let current_dir = std::env::current_dir().unwrap();
     let current_dir_str = current_dir.to_str().unwrap();
