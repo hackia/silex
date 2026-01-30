@@ -1,16 +1,17 @@
-use crate::db::SILEX_INIT;
 use crate::utils::ok;
 use crate::utils::ok_status;
 use crate::utils::ok_tag;
-use chrono::Datelike;
-use chrono::Local;
+use glob::GlobError;
+use glob::glob;
 use ignore::DirEntry;
 use similar::{ChangeTag, TextDiff};
 use sqlite::Connection;
 use sqlite::Error;
 use sqlite::State;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::fs::File;
+use std::fs::create_dir_all;
 use std::io::{Error as IoError, ErrorKind}; // On renomme pour clarifier
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
@@ -30,92 +31,28 @@ pub struct ManifestEntry {
     perm: i64,
 }
 
-// --- SAUVEGARDE & SYNCHRONISATION ---
-
-pub fn sync(conn: &Connection, destination_path: &str) -> Result<(), IoError> {
-    let dest_path = Path::new(destination_path);
-    let dest_db_dir = dest_path.join(".silex/db");
-
-    // 1. Préparation du terrain (Création des dossiers sur la clé USB)
-    std::fs::create_dir_all(&dest_db_dir)?;
-
-    println!("Syncing to backup location: {}", dest_path.display());
-
-    // 2. Calcul des chemins
-    let dest_store_path = dest_db_dir.join("store.db");
-    let current_year = Local::now().year();
-    let dest_history_path = dest_db_dir.join(format!("history_{}.db", current_year));
-
-    // 3. SYNCHRONISATION DU STOCKAGE (BLOBS) - INCREMENTAL
-    // Si la base n'existe pas là-bas, on la crée vide d'abord
-    {
-        // On ouvre une connexion temporaire juste pour initialiser le schéma si besoin
-        let c = Connection::open(&dest_store_path)
-            .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-        c.execute(SILEX_INIT)
-            .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+pub fn sync(destination_path: &str) -> Result<(), IoError> {
+    let files: Vec<Result<PathBuf, GlobError>> = glob("./.silex/db/*.db").expect("a").collect();
+    let x = Path::new(destination_path);
+    create_dir_all(format!("{destination_path}/.silex/db"))?;
+    if x.exists() {
+        for file in files.iter().flatten() {
+            let z = file.file_name().expect("failed to get filename");
+            fs::copy(
+                file.as_path()
+                    .to_str()
+                    .expect("failed to get file path")
+                    .to_string()
+                    .as_str(),
+                x.join(format!(".silex/db/{}", z.display()).as_str()),
+            )?;
+            ok(z.to_str()
+                .expect("failed to get filename")
+                .to_string()
+                .as_str());
+        }
     }
-
-    // On attache la base de backup à notre connexion actuelle
-    let attach_store = format!(
-        "ATTACH DATABASE '{}' AS backup_store",
-        dest_store_path.display()
-    );
-    conn.execute(attach_store)
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-
-    println!("... Syncing blobs (files)...");
-    // La magie : On copie seulement ce qui n'existe pas déjà (IGNORE)
-    let sync_blobs = "INSERT OR IGNORE INTO backup_store.blobs SELECT * FROM store.blobs";
-    let sync_assets = "INSERT OR IGNORE INTO backup_store.assets SELECT * FROM store.assets";
-
-    conn.execute(sync_blobs)
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-    conn.execute(sync_assets)
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-
-    // On détache pour nettoyer
-    conn.execute("DETACH DATABASE backup_store")
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-
-    // 4. SYNCHRONISATION DE L'HISTORIQUE (COMMITS) - INCREMENTAL
-    {
-        let c = Connection::open(&dest_history_path)
-            .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-        c.execute(SILEX_INIT)
-            .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-    }
-
-    let attach_history = format!(
-        "ATTACH DATABASE '{}' AS backup_history",
-        dest_history_path.display()
-    );
-    conn.execute(attach_history)
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-
-    println!("... Syncing history (commits, tags, branches)...");
-
-    // Copie des commits
-    conn.execute("INSERT OR IGNORE INTO backup_history.commits SELECT * FROM main.commits")
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-
-    // Copie du manifeste (les liens fichiers <-> commits)
-    conn.execute("INSERT OR IGNORE INTO backup_history.manifest SELECT * FROM main.manifest")
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-
-    // Copie des tags
-    conn.execute("INSERT OR IGNORE INTO backup_history.tags SELECT * FROM main.tags")
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-
-    // Pour les branches, c'est plus subtil : on veut mettre à jour la tête (REPLACE)
-    // Car la branche a avancé depuis la dernière sauvegarde
-    conn.execute("INSERT OR REPLACE INTO backup_history.branches SELECT * FROM main.branches")
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-
-    conn.execute("DETACH DATABASE backup_history")
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
-
-    ok("Backup complete! Your code is safe.");
+    ok("Backup complete");
     Ok(())
 }
 

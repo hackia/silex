@@ -299,10 +299,10 @@ fn main() -> Result<(), Error> {
         }
         Some(("sync", args)) => {
             let current_dir = std::env::current_dir()?;
-            let conn =
+            let _conn =
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
             let path = args.get_one::<String>("path").unwrap();
-            return vcs::sync(&conn, path);
+            return vcs::sync(path);
         }
         Some(("web", args)) => {
             let current_dir = std::env::current_dir()?;
