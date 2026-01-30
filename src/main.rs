@@ -43,6 +43,16 @@ fn cli() -> Command {
                         .action(ArgAction::Set),
                 ),
         )
+        .subcommand(
+            Command::new("branch")
+                .about("Create a new branch")
+                .arg(Arg::new("name").required(true).action(ArgAction::Set)),
+        )
+        .subcommand(
+            Command::new("checkout")
+                .about("Switch branches or restore working tree files")
+                .arg(Arg::new("name").required(true).action(ArgAction::Set)),
+        )
 }
 
 fn perform_commit(args: &ArgMatches) -> Result<(), Error> {
@@ -146,6 +156,20 @@ fn main() -> Result<(), Error> {
 
             let path = sub_matches.get_one::<String>("path").unwrap();
             return vcs::restore(&conn, path).map_err(|e| Error::other(e.to_string()));
+        }
+        Some(("branch", sub_matches)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
+            let name = sub_matches.get_one::<String>("name").unwrap();
+            return vcs::create_branch(&conn, name).map_err(|e| Error::other(e.to_string()));
+        }
+        Some(("checkout", sub_matches)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
+            let name = sub_matches.get_one::<String>("name").unwrap();
+            return vcs::checkout(&conn, name).map_err(|e| Error::other(e.to_string()));
         }
         _ => {
             args.clone().print_help().expect("failed to print the help");

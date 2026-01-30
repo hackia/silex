@@ -25,6 +25,153 @@ pub struct ManifestEntry {
     perm: i64,
 }
 
+pub fn create_branch(conn: &Connection, new_branch_name: &str) -> Result<(), Error> {
+    // 1. On récupère la branche actuelle et son commit ID
+    let current_branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
+    let (head_id, _) = get_branch_head_info(conn, &current_branch)?;
+
+    if let Some(id) = head_id {
+        // 2. On insère la nouvelle étiquette pointant vers le MEME commit
+        let query = "INSERT INTO branches (name, head_commit_id) VALUES (?, ?)";
+        let mut stmt = conn.prepare(query)?;
+        stmt.bind((1, new_branch_name))?;
+        stmt.bind((2, id))?;
+
+        match stmt.next() {
+            Ok(_) => ok(&format!("Branch '{}' created.", new_branch_name)),
+            Err(_) => println!(
+                "\x1b[1;31mError:\x1b[0m Branch '{}' already exists.",
+                new_branch_name
+            ),
+        }
+    } else {
+        println!("Cannot branch from an empty repository. Commit something first.");
+    }
+    Ok(())
+}
+
+// --- LE COEUR DU SYSTEME : CHECKOUT ---
+
+pub fn checkout(conn: &Connection, target_branch: &str) -> Result<(), Error> {
+    // 1. VÉRIFICATION DE SÉCURITÉ
+    // On ne veut pas écraser le travail en cours de l'utilisateur
+    let current_dir = std::env::current_dir().unwrap();
+    let current_branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
+
+    // Si on est déjà dessus, on ne fait rien
+    if current_branch == target_branch {
+        ok(&format!("Already on '{}'", target_branch));
+        return Ok(());
+    }
+
+    let status_list = status(conn, current_dir.to_str().unwrap(), &current_branch)?;
+    if !status_list.is_empty() {
+        println!("\x1b[1;31mError:\x1b[0m Your changes would be overwritten by checkout.");
+        println!("Please commit your changes or stash them first.");
+        return Ok(());
+    }
+
+    // 2. PRÉPARATION DES DONNÉES
+    // On récupère les IDs des commits (Source et Cible)
+    let (current_head_id, _) = get_branch_head_info(conn, &current_branch)?;
+    let (target_head_id, _) = get_branch_head_info(conn, target_branch)?;
+
+    // Si la branche cible n'existe pas
+    if target_head_id.is_none() && target_branch != "main" {
+        // Hack si repo vide
+        println!(
+            "\x1b[1;31mError:\x1b[0m Branch '{}' not found.",
+            target_branch
+        );
+        return Ok(());
+    }
+
+    // On charge les deux manifestes en mémoire pour comparer
+    // Map : Chemin -> (Hash, AssetID)
+    let current_files = get_manifest_map(conn, current_head_id)?;
+    let target_files = get_manifest_map(conn, target_head_id)?;
+
+    println!("Switched to branch '{}'", target_branch);
+
+    // 3. MISE À JOUR DU DISQUE (Différentiel)
+
+    // A. Gérer les AJOUTS et MODIFICATIONS (Target vs Current)
+    for (path, (target_hash, _)) in &target_files {
+        let should_write = match current_files.get(path) {
+            Some((current_hash, _)) => current_hash != target_hash, // Modifié
+            None => true,                                           // Nouveau fichier
+        };
+
+        if should_write {
+            // On récupère le contenu binaire depuis le store
+            if let Some(content) = get_blob_bytes_by_hash(conn, target_hash)? {
+                // On crée les dossiers parents si nécessaire
+                if let Some(parent) = Path::new(path).parent() {
+                    std::fs::create_dir_all(parent).expect("failed to create directory");
+                }
+                std::fs::write(path, content).expect("failed to write content");
+            }
+        }
+    }
+
+    // B. Gérer les SUPPRESSIONS (Ce qui est dans Current mais plus dans Target)
+    for (path, _) in &current_files {
+        if !target_files.contains_key(path) {
+            if Path::new(path).exists() {
+                std::fs::remove_file(path).expect("failed to remove the file");
+                // Optionnel : Supprimer les dossiers vides parents
+            }
+        }
+    }
+
+    // 4. METTRE À JOUR LA CONFIGURATION
+    let query = "UPDATE config SET value = ? WHERE key = 'current_branch'";
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, target_branch))?;
+    stmt.next()?;
+
+    Ok(())
+}
+
+// --- NOUVEAUX HELPERS ---
+
+// Récupère tout le manifeste d'un commit sous forme de HashMap facile à comparer
+fn get_manifest_map(
+    conn: &Connection,
+    commit_id: Option<i64>,
+) -> Result<HashMap<String, (String, i64)>, Error> {
+    let mut map = HashMap::new();
+    if let Some(id) = commit_id {
+        let query = "
+            SELECT m.file_path, b.hash, m.asset_id 
+            FROM manifest m
+            JOIN store.blobs b ON m.blob_id = b.id
+            WHERE m.commit_id = ?
+        ";
+        let mut stmt = conn.prepare(query)?;
+        stmt.bind((1, id))?;
+        while let Ok(State::Row) = stmt.next() {
+            let path: String = stmt.read("file_path")?;
+            let hash: String = stmt.read("hash")?;
+            let asset_id: i64 = stmt.read("asset_id")?;
+            map.insert(path, (hash, asset_id));
+        }
+    }
+    Ok(map)
+}
+
+// Récupère les octets via le hash (plus rapide que via le path)
+fn get_blob_bytes_by_hash(conn: &Connection, hash: &str) -> Result<Option<Vec<u8>>, Error> {
+    let query = "SELECT content FROM store.blobs WHERE hash = ?";
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, hash))?;
+    if let Ok(State::Row) = stmt.next() {
+        Ok(Some(stmt.read("content")?))
+    } else {
+        Ok(None)
+    }
+}
+
 // Helper pour récupérer le contenu BRUT (bytes) d'un fichier dans le HEAD
 // C'est vital pour restaurer des images ou des exécutables sans corruption UTF-8
 fn get_blob_bytes(conn: &Connection, branch: &str, path: &Path) -> Result<Option<Vec<u8>>, Error> {
