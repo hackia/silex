@@ -7,6 +7,7 @@ use sqlite::Error;
 use sqlite::State;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::io::{Error as IoError, ErrorKind}; // On renomme pour clarifier
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -23,6 +24,77 @@ pub struct ManifestEntry {
     blob_id: i64,
     asset_id: i64,
     perm: i64,
+}
+
+pub fn tag_create(conn: &Connection, name: &str, message: Option<&str>) -> Result<(), IoError> {
+    // 1. On récupère le commit actuel (HEAD)
+    let current_branch = crate::db::get_current_branch(conn)
+        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+
+    let (head_id, head_hash) = get_branch_head_info(conn, &current_branch)
+        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+
+    if head_id.is_none() {
+        return Err(IoError::other(
+            "Cannot tag an empty branch. Commit something first.",
+        ));
+    }
+
+    // 2. On insère le tag
+    let query = "INSERT INTO tags (name, commit_id, description) VALUES (?, ?, ?)";
+    let mut stmt = conn
+        .prepare(query)
+        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+
+    stmt.bind((1, name)).unwrap();
+    stmt.bind((2, head_id.unwrap())).unwrap();
+    stmt.bind((3, message)).unwrap();
+
+    match stmt.next() {
+        Ok(_) => ok(&format!(
+            "Tag '{}' created on commit {}",
+            name,
+            &head_hash[0..7]
+        )),
+        Err(_) => return Err(IoError::other(format!("Tag '{}' already exists.", name))),
+    }
+    Ok(())
+}
+
+pub fn tag_list(conn: &Connection) -> Result<(), IoError> {
+    // On joint avec la table commits pour afficher le hash correspondant
+    let query = "
+        SELECT t.name, t.description, c.hash
+        FROM tags t
+        JOIN commits c ON t.commit_id = c.id
+        ORDER BY t.name
+    ";
+    let mut stmt = conn
+        .prepare(query)
+        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+
+    println!("Existing tags:");
+    let mut count = 0;
+    while let Ok(State::Row) = stmt.next() {
+        let name: String = stmt.read("name").unwrap();
+        let desc: Option<String> = stmt.read("description").unwrap_or(None);
+        let hash: String = stmt.read("hash").unwrap();
+
+        let desc_str = desc.unwrap_or_else(|| String::new());
+        // Affichage : Nom (Jaune) -> Hash (Gris) Description
+        println!(
+            "  \x1b[1;33m{}\x1b[0m -> {} \x1b[90m{}\x1b[0m",
+            name,
+            &hash[0..7],
+            desc_str
+        );
+        count += 1;
+    }
+
+    if count == 0 {
+        println!("  (No tags yet)");
+    }
+    Ok(())
 }
 
 // --- GESTION GIT FLOW (OPTIMISÉE) ---

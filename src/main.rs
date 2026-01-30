@@ -81,6 +81,22 @@ fn cli() -> Command {
                         .arg(Arg::new("name").required(true).action(ArgAction::Set)),
                 ),
         )
+        .subcommand(
+            Command::new("tag")
+                .about("Manage version tags")
+                .subcommand(
+                    Command::new("create")
+                        .about("Create a new tag at HEAD")
+                        .arg(Arg::new("name").required(true).action(ArgAction::Set))
+                        .arg(
+                            Arg::new("message")
+                                .short('m')
+                                .help("Description")
+                                .action(ArgAction::Set),
+                        ),
+                )
+                .subcommand(Command::new("list").about("List all tags")),
+        )
 }
 
 fn perform_commit(args: &ArgMatches) -> Result<(), Error> {
@@ -238,6 +254,28 @@ fn main() -> Result<(), Error> {
                         .map_err(|e| Error::other(e.to_string()));
                 }
                 _ => Ok(()),
+            }
+        }
+        Some(("tag", sub_matches)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
+
+            match sub_matches.subcommand() {
+                Some(("create", args)) => {
+                    let name = args.get_one::<String>("name").unwrap();
+                    let msg = args.get_one::<String>("message").map(|s| s.as_str());
+                    return vcs::tag_create(&conn, name, msg);
+                }
+                Some(("list", _)) => {
+                    return vcs::tag_list(&conn);
+                }
+                _ => {
+                    // Par défaut, si l'utilisateur tape juste 'silex tag', on peut lister
+                    // Mais avec clap configuré ainsi, il affichera l'aide.
+                    println!("Please use 'create' or 'list'.");
+                    Ok(())
+                }
             }
         }
         _ => {
