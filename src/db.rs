@@ -62,6 +62,7 @@ pub const SILEX_INIT: &str = "
         name TEXT UNIQUE NOT NULL,
         commit_id INTEGER NOT NULL,
         description TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (commit_id) REFERENCES commits(id)
     );
 

@@ -1,3 +1,11 @@
+use std::io::stdout;
+
+use crossterm::{
+    execute,
+    style::{Print, Stylize},
+    terminal::size,
+};
+
 use crate::vcs::FileStatus;
 
 pub fn ok(message: &str) {
@@ -28,4 +36,22 @@ pub fn ok_status(verb: &FileStatus) {
         }
         _ => {}
     }
+}
+
+pub fn ok_tag(tag: &str, description: &str, date: &str, _hash: &str) {
+    let (x, _) = size().expect("failed to get term size");
+
+    let padding = x - tag.len() as u16 - description.len() as u16 - date.len() as u16 - 9;
+
+    let _ = execute!(
+        stdout(),
+        Print(" * ".green().bold()),
+        Print(tag.blue().bold()),
+        Print(" "),
+        Print(description.cyan().bold()),
+        Print(" ".repeat(padding as usize)),
+        Print(" [ ".white().bold()),
+        Print(date.green().bold()),
+        Print(" ]\n".white().bold()),
+    );
 }

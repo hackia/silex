@@ -732,6 +732,7 @@ dependencies = [
  "blake3",
  "chrono",
  "clap",
+ "crossterm",
  "hex",
  "ignore",
  "inquire",

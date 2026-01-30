@@ -1,5 +1,6 @@
 use crate::utils::ok;
 use crate::utils::ok_status;
+use crate::utils::ok_tag;
 use ignore::DirEntry;
 use similar::{ChangeTag, TextDiff};
 use sqlite::Connection;
@@ -64,7 +65,7 @@ pub fn tag_create(conn: &Connection, name: &str, message: Option<&str>) -> Resul
 pub fn tag_list(conn: &Connection) -> Result<(), IoError> {
     // On joint avec la table commits pour afficher le hash correspondant
     let query = "
-        SELECT t.name, t.description, c.hash
+        SELECT t.name, t.description, t.created_at, c.hash
         FROM tags t
         JOIN commits c ON t.commit_id = c.id
         ORDER BY t.name
@@ -73,26 +74,23 @@ pub fn tag_list(conn: &Connection) -> Result<(), IoError> {
         .prepare(query)
         .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
 
-    println!("Existing tags:");
     let mut count = 0;
     while let Ok(State::Row) = stmt.next() {
         let name: String = stmt.read("name").unwrap();
         let desc: Option<String> = stmt.read("description").unwrap_or(None);
         let hash: String = stmt.read("hash").unwrap();
-
-        let desc_str = desc.unwrap_or_else(|| String::new());
-        // Affichage : Nom (Jaune) -> Hash (Gris) Description
-        println!(
-            "  \x1b[1;33m{}\x1b[0m -> {} \x1b[90m{}\x1b[0m",
-            name,
-            &hash[0..7],
-            desc_str
+        let date: String = stmt.read("created_at").unwrap();
+        let desc_str = desc.unwrap_or_else(|| String::from("no description"));
+        ok_tag(
+            name.as_str(),
+            desc_str.as_str(),
+            date.as_str(),
+            hash.as_str(),
         );
         count += 1;
     }
-
     if count == 0 {
-        println!("  (No tags yet)");
+        ok("no tags yet");
     }
     Ok(())
 }
