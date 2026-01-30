@@ -20,6 +20,7 @@ fn cli() -> Command {
         .subcommand(Command::new("new").about("create a new silex project"))
         .subcommand(Command::new("status").about("show changes in working directory"))
         .subcommand(Command::new("log").about("Show commit logs"))
+        .subcommand(Command::new("diff").about("Show changes between working tree and last commit"))
         .subcommand(
             Command::new("commit")
                 .about("Record changes to the repository")
@@ -121,6 +122,12 @@ fn main() -> Result<(), Error> {
             let conn =
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
             return vcs::log(&conn).map_err(|e| Error::other(e.to_string()));
+        }
+        Some(("diff", _)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
+            return vcs::diff(&conn).map_err(|e| Error::other(e.to_string()));
         }
         _ => {
             args.clone().print_help().expect("failed to print the help");

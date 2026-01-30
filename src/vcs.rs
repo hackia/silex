@@ -1,6 +1,7 @@
 use crate::utils::ok;
 use crate::utils::ok_status;
 use ignore::DirEntry;
+use similar::{ChangeTag, TextDiff};
 use sqlite::Connection;
 use sqlite::Error;
 use sqlite::State;
@@ -22,6 +23,96 @@ pub struct ManifestEntry {
     blob_id: i64,
     asset_id: i64,
     perm: i64,
+}
+
+pub fn diff(conn: &Connection) -> Result<(), Error> {
+    let current_dir = std::env::current_dir().unwrap();
+    let current_dir_str = current_dir.to_str().unwrap();
+    let branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
+
+    // 1. On récupère les changements (on réutilise ta logique de status)
+    let changes = status(conn, current_dir_str, &branch)?;
+
+    if changes.is_empty() {
+        return Ok(());
+    }
+
+    for change in changes {
+        match change {
+            FileStatus::Modified(path, _) => {
+                println!("\n\x1b[1;33mDiff: {}\x1b[0m", path.display());
+                println!("\x1b[90m==================================================\x1b[0m");
+
+                // A. Lire le nouveau contenu sur le disque
+                let new_content = match std::fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        println!("(Binary or unreadable file)");
+                        continue;
+                    }
+                };
+
+                // B. Récupérer l'ancien contenu depuis la BDD (via le Hash du HEAD)
+                let old_content = get_file_content_from_head(conn, &branch, &path)?;
+
+                // C. Calculer et afficher le Diff
+                let diff = TextDiff::from_lines(&old_content, &new_content);
+
+                for change in diff.iter_all_changes() {
+                    let (sign, color) = match change.tag() {
+                        ChangeTag::Delete => ("-", "\x1b[31m"), // Rouge
+                        ChangeTag::Insert => ("+", "\x1b[32m"), // Vert
+                        ChangeTag::Equal => (" ", "\x1b[0m"),   // Blanc
+                    };
+                    print!("{}{}{}\x1b[0m", color, sign, change);
+                }
+            }
+            FileStatus::New(path) => {
+                println!(
+                    "\n\x1b[1;32mNew File: {}\x1b[0m (All content is new)",
+                    path.display()
+                );
+            }
+            FileStatus::Deleted(path, _) => {
+                println!("\n\x1b[1;31mDeleted File: {}\x1b[0m", path.display());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+// Helper pour récupérer le contenu textuel d'un blob depuis le HEAD
+fn get_file_content_from_head(
+    conn: &Connection,
+    branch: &str,
+    path: &Path,
+) -> Result<String, Error> {
+    let relative_path = path.strip_prefix(".").unwrap_or(path).to_string_lossy();
+
+    // 1. Trouver le hash du fichier dans le commit HEAD
+    let query = "
+        SELECT b.content 
+        FROM branches br
+        JOIN manifest m ON m.commit_id = br.head_commit_id
+        JOIN store.blobs b ON m.blob_id = b.id
+        WHERE br.name = ? AND m.file_path = ?
+    ";
+
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, branch))?;
+    stmt.bind((2, relative_path.as_ref()))?;
+
+    if let Ok(State::Row) = stmt.next() {
+        // Attention : On suppose ici que c'est du texte (UTF-8)
+        let content_blob: Vec<u8> = stmt.read("content")?;
+        match String::from_utf8(content_blob) {
+            Ok(s) => Ok(s),
+            Err(_) => Ok(String::from("(Binary content)")),
+        }
+    } else {
+        Ok(String::new()) // Fichier introuvable (ne devrait pas arriver si Modified)
+    }
 }
 
 pub fn log(conn: &Connection) -> Result<(), Error> {
