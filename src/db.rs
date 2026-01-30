@@ -70,7 +70,77 @@ pub const SILEX_INIT: &str = "
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
+-- ====================================================================
+-- PARTIE 1 : MESSAGERIE ÉPHÉMÈRE (Autodestruction à 20h)
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS ephemeral_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    -- La date d'expiration est calculée à l'insertion par l'app (prochain 20h)
+    expires_at DATETIME NOT NULL, 
+    is_read BOOLEAN DEFAULT 0
+);
 
+-- Index pour accélérer le nettoyage automatique
+CREATE INDEX IF NOT EXISTS idx_messages_expire ON ephemeral_messages(expires_at);
+
+-- ====================================================================
+-- PARTIE 2 : TODO LIST INTÉGRÉE
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS todos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT DEFAULT 'TODO', -- TODO, IN_PROGRESS, DONE
+    assigned_to TEXT,           -- Peut être lié à un auteur de commit
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Trigger pour mettre à jour updated_at automatiquement
+CREATE TRIGGER IF NOT EXISTS update_todos_timestamp 
+AFTER UPDATE ON todos
+BEGIN
+    UPDATE todos SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+END;
+
+-- ====================================================================
+-- PARTIE 3 : STATS DE CO-OCCURRENCE (Fichiers modifiés ensemble)
+-- ====================================================================
+-- Cette table sert de cache pour éviter de scanner tous les commits à chaque fois
+CREATE TABLE IF NOT EXISTS file_correlations (
+    file_a TEXT NOT NULL,
+    file_b TEXT NOT NULL,
+    frequency INTEGER DEFAULT 1,
+    last_seen_commit_id INTEGER,
+    -- On force l'ordre alphabétique (file_a < file_b) pour éviter les doublons (A,B) et (B,A)
+    PRIMARY KEY (file_a, file_b)
+);
+
+-- ====================================================================
+-- PARTIE 4 : LOGS (Style Logstash)
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS system_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    level TEXT NOT NULL,
+    component TEXT NOT NULL,
+    message TEXT NOT NULL,
+    metadata JSON,
+    trace_id TEXT
+=======================================================================
+-- PARTIE 5 : CLASSEMENT DES CONTRIBUTEURS
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS contributor_stats (
+    author_name TEXT PRIMARY KEY,
+    total_commits INTEGER DEFAULT 0,
+    first_commit_at DATETIME,
+    last_commit_at DATETIME,
+    files_touched_count INTEGER DEFAULT 0,
+    rank_score REAL DEFAULT 0.0 
+);
     -- Initialisation par défaut (ignore si existe déjà)
     INSERT OR IGNORE INTO config (key, value) VALUES ('current_branch', 'main');
 ";

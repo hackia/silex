@@ -1,3 +1,4 @@
+use breathes::hooks::run_hooks;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use inquire::Text;
 use std::fs::File;
@@ -8,6 +9,7 @@ use std::path::Path;
 use crate::db::{SILEX_INIT, connect_silex, get_current_branch};
 use crate::utils::ok;
 
+pub mod chat;
 pub mod db;
 pub mod utils;
 pub mod vcs;
@@ -191,26 +193,26 @@ fn main() -> Result<(), Error> {
     let args = cli();
     let app = args.clone().get_matches();
     match app.subcommand() {
-        Some(("new", _)) => {
-            return new_project();
-        }
-        Some(("status", _)) => {
-            return check_status();
-        }
+        Some(("new", _)) => new_project(),
+        Some(("status", _)) => check_status(),
         Some(("commit", sub_matches)) => {
-            return perform_commit(sub_matches);
+            if run_hooks().is_ok() && perform_commit(sub_matches).is_ok() {
+                Ok(())
+            } else {
+                Err(Error::other("commit not accepted"))
+            }
         }
         Some(("log", _)) => {
             let current_dir = std::env::current_dir()?;
             let conn =
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
-            return vcs::log(&conn).map_err(|e| Error::other(e.to_string()));
+            vcs::log(&conn).map_err(|e| Error::other(e.to_string()))
         }
         Some(("diff", _)) => {
             let current_dir = std::env::current_dir()?;
             let conn =
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
-            return vcs::diff(&conn).map_err(|e| Error::other(e.to_string()));
+            vcs::diff(&conn).map_err(|e| Error::other(e.to_string()))
         }
         Some(("restore", sub_matches)) => {
             let current_dir = std::env::current_dir()?;
@@ -218,21 +220,21 @@ fn main() -> Result<(), Error> {
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
 
             let path = sub_matches.get_one::<String>("path").unwrap();
-            return vcs::restore(&conn, path).map_err(|e| Error::other(e.to_string()));
+            vcs::restore(&conn, path).map_err(|e| Error::other(e.to_string()))
         }
         Some(("branch", sub_matches)) => {
             let current_dir = std::env::current_dir()?;
             let conn =
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
             let name = sub_matches.get_one::<String>("name").unwrap();
-            return vcs::create_branch(&conn, name).map_err(|e| Error::other(e.to_string()));
+            vcs::create_branch(&conn, name).map_err(|e| Error::other(e.to_string()))
         }
         Some(("checkout", sub_matches)) => {
             let current_dir = std::env::current_dir()?;
             let conn =
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
             let name = sub_matches.get_one::<String>("name").unwrap();
-            return vcs::checkout(&conn, name).map_err(|e| Error::other(e.to_string()));
+            vcs::checkout(&conn, name).map_err(|e| Error::other(e.to_string()))
         }
         Some(("feat", sub_matches)) => {
             let current_dir = std::env::current_dir()?;
@@ -243,16 +245,14 @@ fn main() -> Result<(), Error> {
             match sub_matches.subcommand() {
                 Some(("start", args)) => {
                     let name = args.get_one::<String>("name").unwrap();
-                    return vcs::feature_start(&conn, name)
-                        .map_err(|e| Error::other(e.to_string()));
+                    vcs::feature_start(&conn, name).map_err(|e| Error::other(e.to_string()))
                 }
                 Some(("finish", args)) => {
                     let name = args.get_one::<String>("name").unwrap();
-                    return vcs::feature_finish(&conn, name)
-                        .map_err(|e| Error::other(e.to_string()));
+                    vcs::feature_finish(&conn, name).map_err(|e| Error::other(e.to_string()))
                 }
                 _ => {
-                    println!("Please specify 'start' or 'finish'.");
+                    ok("Please specify 'start' or 'finish'.");
                     Ok(())
                 }
             }
@@ -265,14 +265,16 @@ fn main() -> Result<(), Error> {
             match sub_matches.subcommand() {
                 Some(("start", args)) => {
                     let name = args.get_one::<String>("name").unwrap();
-                    return vcs::hotfix_start(&conn, name).map_err(|e| Error::other(e.to_string()));
+                    vcs::hotfix_start(&conn, name).map_err(|e| Error::other(e.to_string()))
                 }
                 Some(("finish", args)) => {
                     let name = args.get_one::<String>("name").unwrap();
-                    return vcs::hotfix_finish(&conn, name)
-                        .map_err(|e| Error::other(e.to_string()));
+                    vcs::hotfix_finish(&conn, name).map_err(|e| Error::other(e.to_string()))
                 }
-                _ => Ok(()),
+                _ => {
+                    ok("please specify 'start' or 'finish'");
+                    Ok(())
+                }
             }
         }
         Some(("tag", sub_matches)) => {
@@ -284,15 +286,11 @@ fn main() -> Result<(), Error> {
                 Some(("create", args)) => {
                     let name = args.get_one::<String>("name").unwrap();
                     let msg = args.get_one::<String>("message").map(|s| s.as_str());
-                    return vcs::tag_create(&conn, name, msg);
+                    vcs::tag_create(&conn, name, msg)
                 }
-                Some(("list", _)) => {
-                    return vcs::tag_list(&conn);
-                }
+                Some(("list", _)) => vcs::tag_list(&conn),
                 _ => {
-                    // Par défaut, si l'utilisateur tape juste 'silex tag', on peut lister
-                    // Mais avec clap configuré ainsi, il affichera l'aide.
-                    println!("Please use 'create' or 'list'.");
+                    ok("Please use 'create' or 'list'.");
                     Ok(())
                 }
             }
@@ -302,13 +300,11 @@ fn main() -> Result<(), Error> {
             let _conn =
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
             let path = args.get_one::<String>("path").unwrap();
-            return vcs::sync(path);
+            vcs::sync(path)
         }
         Some(("web", args)) => {
             let current_dir = std::env::current_dir()?;
             let current_dir_str = current_dir.to_str().unwrap();
-
-            // On vérifie que c'est un dépôt Silex
             if !Path::new(".silex").exists() {
                 return Err(Error::other("Not a silex repository."));
             }
@@ -318,11 +314,8 @@ fn main() -> Result<(), Error> {
                 .unwrap()
                 .parse()
                 .unwrap_or(3000);
-
-            // On lance le moteur Asynchrone juste pour cette commande
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(crate::web::start_server(current_dir_str, port));
-
             Ok(())
         }
         _ => {

@@ -19,19 +19,19 @@ pub fn ok_status(verb: &FileStatus) {
         FileStatus::New(p) => {
             println!(
                 "{}",
-                format!("\x1b[1;32m+\x1b[1;37m {}\x1b[0m", p.display())
+                format_args!("\x1b[1;32m+\x1b[1;37m {}\x1b[0m", p.display())
             );
         }
         FileStatus::Modified(p, _) => {
             println!(
                 "{}",
-                format!("\x1b[1;33m~\x1b[1;37m {}\x1b[0m", p.display())
+                format_args!("\x1b[1;33m~\x1b[1;37m {}\x1b[0m", p.display())
             );
         }
         FileStatus::Deleted(p, _) => {
             println!(
                 "{}",
-                format!("\x1b[1;31m-\x1b[1;37m {}\x1b[0m", p.display())
+                format_args!("\x1b[1;31m-\x1b[1;37m {}\x1b[0m", p.display())
             );
         }
         _ => {}
@@ -54,4 +54,10 @@ pub fn ok_tag(tag: &str, description: &str, date: &str, _hash: &str) {
         Print(date.green().bold()),
         Print(" ]\n".white().bold()),
     );
+}
+
+pub fn hooks(c: fn()) {
+    if breathes::hooks::run_hooks().is_ok() {
+        c();
+    }
 }

@@ -1,3 +1,4 @@
+use crate::db::get_current_branch;
 use crate::utils::ok;
 use crate::utils::ok_status;
 use crate::utils::ok_tag;
@@ -12,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::fs::create_dir_all;
-use std::io::{Error as IoError, ErrorKind}; // On renomme pour clarifier
+use std::io::Error as IoError; // On renomme pour clarifier
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -58,11 +59,10 @@ pub fn sync(destination_path: &str) -> Result<(), IoError> {
 
 pub fn tag_create(conn: &Connection, name: &str, message: Option<&str>) -> Result<(), IoError> {
     // 1. On récupère le commit actuel (HEAD)
-    let current_branch = crate::db::get_current_branch(conn)
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+    let current_branch = get_current_branch(conn).expect("faield to get current branch");
 
-    let (head_id, head_hash) = get_branch_head_info(conn, &current_branch)
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+    let (head_id, head_hash) =
+        get_branch_head_info(conn, &current_branch).map_err(|e| IoError::other(e.to_string()))?;
 
     if head_id.is_none() {
         return Err(IoError::other(
@@ -74,7 +74,7 @@ pub fn tag_create(conn: &Connection, name: &str, message: Option<&str>) -> Resul
     let query = "INSERT INTO tags (name, commit_id, description) VALUES (?, ?, ?)";
     let mut stmt = conn
         .prepare(query)
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| IoError::other(e.to_string()))?;
 
     stmt.bind((1, name)).unwrap();
     stmt.bind((2, head_id.unwrap())).unwrap();
@@ -86,7 +86,7 @@ pub fn tag_create(conn: &Connection, name: &str, message: Option<&str>) -> Resul
             name,
             &head_hash[0..7]
         )),
-        Err(_) => return Err(IoError::other(format!("Tag '{}' already exists.", name))),
+        Err(_) => return Err(IoError::other(format!("Tag '{name}' already exists."))),
     }
     Ok(())
 }
@@ -101,7 +101,7 @@ pub fn tag_list(conn: &Connection) -> Result<(), IoError> {
     ";
     let mut stmt = conn
         .prepare(query)
-        .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| IoError::other(e.to_string()))?;
 
     let mut count = 0;
     while let Ok(State::Row) = stmt.next() {
@@ -200,10 +200,8 @@ pub fn hotfix_finish(conn: &Connection, name: &str) -> Result<(), Error> {
 
 pub fn feature_start(conn: &Connection, name: &str) -> Result<(), Error> {
     // 1. Standardisation du nom : feature/nom
-    let branch_name = format!("feature/{}", name);
+    let branch_name = format!("feature/{name}");
 
-    // 2. On crée la branche (basée sur le HEAD actuel)
-    // create_branch gère déjà l'erreur si elle existe
     create_branch(conn, &branch_name)?;
 
     // 3. On bascule dessus immédiatement (Optimisation UX)
@@ -252,7 +250,7 @@ pub fn feature_finish(conn: &Connection, name: &str) -> Result<(), Error> {
 
 pub fn create_branch(conn: &Connection, new_branch_name: &str) -> Result<(), Error> {
     // 1. On récupère la branche actuelle et son commit ID
-    let current_branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
+    let current_branch = get_current_branch(conn).expect("failed to get current branch");
     let (head_id, _) = get_branch_head_info(conn, &current_branch)?;
 
     if let Some(id) = head_id {
@@ -263,11 +261,10 @@ pub fn create_branch(conn: &Connection, new_branch_name: &str) -> Result<(), Err
         stmt.bind((2, id))?;
 
         match stmt.next() {
-            Ok(_) => ok(&format!("Branch '{}' created.", new_branch_name)),
-            Err(_) => println!(
-                "\x1b[1;31mError:\x1b[0m Branch '{}' already exists.",
-                new_branch_name
-            ),
+            Ok(_) => ok(&format!("Branch '{new_branch_name}' created.")),
+            Err(_) => {
+                println!("\x1b[1;31mError:\x1b[0m Branch '{new_branch_name}' already exists.")
+            }
         }
     } else {
         ok("Cannot branch from an empty repository. Commit something first.");
@@ -281,7 +278,7 @@ pub fn checkout(conn: &Connection, target_branch: &str) -> Result<(), Error> {
     // 1. VÉRIFICATION DE SÉCURITÉ
     // On ne veut pas écraser le travail en cours de l'utilisateur
     let current_dir = std::env::current_dir().unwrap();
-    let current_branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
+    let current_branch = get_current_branch(conn).expect("fialed to get current branch");
 
     // Si on est déjà dessus, on ne fait rien
     if current_branch == target_branch {
@@ -326,23 +323,20 @@ pub fn checkout(conn: &Connection, target_branch: &str) -> Result<(), Error> {
 
         if should_write {
             // On récupère le contenu binaire depuis le store
-            if let Some(content) = get_blob_bytes_by_hash(conn, target_hash)? {
-                // On crée les dossiers parents si nécessaire
-                if let Some(parent) = Path::new(path).parent() {
-                    std::fs::create_dir_all(parent).expect("failed to create directory");
-                }
+            if let Some(content) = get_blob_bytes_by_hash(conn, target_hash)?
+                && let Some(parent) = Path::new(path).parent()
+            {
+                std::fs::create_dir_all(parent).expect("failed to create directory");
                 std::fs::write(path, content).expect("failed to write content");
             }
         }
     }
 
     // B. Gérer les SUPPRESSIONS (Ce qui est dans Current mais plus dans Target)
-    for (path, _) in &current_files {
-        if !target_files.contains_key(path) {
-            if Path::new(path).exists() {
-                std::fs::remove_file(path).expect("failed to remove the file");
-                // Optionnel : Supprimer les dossiers vides parents
-            }
+    for path in current_files.keys() {
+        if !target_files.contains_key(path) && Path::new(path).exists() {
+            std::fs::remove_file(path).expect("failed to remove the file");
+            // Optionnel : Supprimer les dossiers vides parents
         }
     }
 
@@ -421,8 +415,7 @@ fn get_blob_bytes(conn: &Connection, branch: &str, path: &Path) -> Result<Option
 
 pub fn restore(conn: &Connection, path_str: &str) -> Result<(), Error> {
     let path = Path::new(path_str);
-    let branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
-
+    let branch = get_current_branch(conn).expect("failed to get current branch");
     // 1. On cherche le contenu original dans la BDD
     match get_blob_bytes(conn, &branch, path)? {
         Some(content) => {
@@ -445,8 +438,7 @@ pub fn restore(conn: &Connection, path_str: &str) -> Result<(), Error> {
 pub fn diff(conn: &Connection) -> Result<(), Error> {
     let current_dir = std::env::current_dir().unwrap();
     let current_dir_str = current_dir.to_str().unwrap();
-    let branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
-
+    let branch = get_current_branch(conn).expect("failed to get current branch");
     // 1. On récupère les changements (on réutilise ta logique de status)
     let changes = status(conn, current_dir_str, &branch)?;
 
@@ -534,7 +526,7 @@ fn get_file_content_from_head(
 
 pub fn log(conn: &Connection) -> Result<(), Error> {
     // 1. Trouver où on est (HEAD de la branche actuelle
-    let current_branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
+    let current_branch = get_current_branch(conn).expect("failed to get current branch");
     // On réutilise ta fonction helper pour avoir le hash du dernier commit
     let (_, mut current_hash) = get_branch_head_info(conn, &current_branch)?;
 
@@ -578,12 +570,11 @@ pub fn log(conn: &Connection) -> Result<(), Error> {
             break; // Plus de commit trouvé (ne devrait pas arriver si l'intégrité est bonne)
         }
     }
-
     Ok(())
 }
 
 pub fn commit(conn: &Connection, message: &str, author: &str) -> Result<(), Error> {
-    let current_branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
+    let current_branch = get_current_branch(conn).expect("failed to get current branch");
     let (parent_id, parent_hash) = get_branch_head_info(conn, &current_branch)?;
 
     // 1. Charger l'état parent complet (ID + Hash)
@@ -655,7 +646,7 @@ pub fn commit(conn: &Connection, message: &str, author: &str) -> Result<(), Erro
 
     // --- DÉTECTION DES SUPPRESSIONS ---
     // Si un fichier était dans le parent mais n'est pas dans le nouveau manifest -> DELETED
-    for (old_path, _) in &parent_state {
+    for old_path in parent_state.keys() {
         if !new_manifest.iter().any(|e| e.path == *old_path) {
             changes_count += 1;
         }
@@ -775,7 +766,7 @@ fn ensure_blob_exists(conn: &Connection, hash: &str, path: &Path, size: u64) -> 
     stmt.bind((1, hash))?;
 
     if let Ok(State::Row) = stmt.next() {
-        return Ok(stmt.read("id")?);
+        return stmt.read("id");
     }
 
     // 2. Si non, on l'insère
@@ -793,7 +784,7 @@ fn ensure_blob_exists(conn: &Connection, hash: &str, path: &Path, size: u64) -> 
     stmt_ins.bind((3, size as i64))?;
 
     stmt_ins.next()?;
-    Ok(stmt_ins.read("id")?)
+    stmt_ins.read("id")
 }
 
 fn create_new_asset(conn: &Connection, _creator: &str) -> Result<i64, Error> {
@@ -802,7 +793,7 @@ fn create_new_asset(conn: &Connection, _creator: &str) -> Result<i64, Error> {
     let mut stmt = conn.prepare(query)?;
     stmt.bind((1, new_uuid.as_str()))?;
     stmt.next()?;
-    Ok(stmt.read("id")?)
+    stmt.read("id")
 }
 
 pub fn get_head_state(
@@ -890,7 +881,7 @@ pub fn status(conn: &Connection, root_path: &str, branch: &str) -> Result<Vec<Fi
         ok("No changes detected. Working tree is clean.");
     } else {
         for change in &changes {
-            ok_status(&change);
+            ok_status(change);
         }
     }
     Ok(changes)
