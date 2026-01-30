@@ -43,7 +43,7 @@ fn cli() -> Command {
                 )
                 .subcommand(Command::new("list"))
                 .subcommand(
-                    Command::new("done").arg(
+                    Command::new("close").arg(
                         Arg::new("id")
                             .required(true)
                             .value_parser(clap::value_parser!(i64)),
@@ -403,7 +403,7 @@ fn main() -> Result<(), Error> {
                 Some(("list", _)) => {
                     todo::list_todos(&conn).map_err(|e| Error::other(e.to_string()))
                 }
-                Some(("done", args)) => {
+                Some(("close", args)) => {
                     let id = args.get_one::<i64>("id").unwrap();
                     todo::complete_todo(&conn, *id).expect("failed to complete todo");
                     Ok(())
