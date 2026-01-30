@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS todos (
     description TEXT,
     status TEXT DEFAULT 'TODO', -- TODO, IN_PROGRESS, DONE
     assigned_to TEXT,           -- Peut être lié à un auteur de commit
+    due_date DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

@@ -5,7 +5,6 @@ use std::fs::File;
 use std::io::Error;
 use std::path::MAIN_SEPARATOR_STR;
 use std::path::Path;
-use tabled::grid::util::string::get_lines;
 
 use crate::chat::list_messages;
 use crate::chat::send_message;
@@ -14,6 +13,7 @@ use crate::utils::ok;
 
 pub mod chat;
 pub mod db;
+pub mod todo;
 pub mod utils;
 pub mod vcs;
 pub mod web;
@@ -27,6 +27,29 @@ fn cli() -> Command {
         .subcommand(Command::new("status").about("show changes in working directory"))
         .subcommand(Command::new("log").about("Show commit logs"))
         .subcommand(Command::new("diff").about("Show changes between working tree and last commit"))
+        .subcommand(
+            Command::new("todo")
+                .about("Manage project tasks")
+                .subcommand(
+                    Command::new("add")
+                        .arg(Arg::new("title").required(true))
+                        .arg(Arg::new("user").short('u').help("Assign to user"))
+                        .arg(
+                            Arg::new("due")
+                                .short('d')
+                                .long("due")
+                                .help("Due date (YYYY-MM-DD)"),
+                        ),
+                )
+                .subcommand(Command::new("list"))
+                .subcommand(
+                    Command::new("done").arg(
+                        Arg::new("id")
+                            .required(true)
+                            .value_parser(clap::value_parser!(i64)),
+                    ),
+                ),
+        )
         .subcommand(
             Command::new("commit")
                 .about("Record changes to the repository")
@@ -364,6 +387,29 @@ fn main() -> Result<(), Error> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(crate::web::start_server(current_dir_str, port));
             Ok(())
+        }
+        Some(("todo", sub)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).expect("failed to connect to the database");
+            match sub.subcommand() {
+                Some(("add", args)) => {
+                    let title = args.get_one::<String>("title").unwrap();
+                    let user = args.get_one::<String>("user").map(|s| s.as_str());
+                    let due = args.get_one::<String>("due").map(|s| s.as_str());
+                    todo::add_todo(&conn, title, user, due).expect("failed to add todo");
+                    Ok(())
+                }
+                Some(("list", _)) => {
+                    todo::list_todos(&conn).map_err(|e| Error::other(e.to_string()))
+                }
+                Some(("done", args)) => {
+                    let id = args.get_one::<i64>("id").unwrap();
+                    todo::complete_todo(&conn, *id).expect("failed to complete todo");
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
         }
         _ => {
             args.clone().print_help().expect("failed to print the help");

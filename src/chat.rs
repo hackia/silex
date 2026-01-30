@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Local, Timelike};
+use chrono::{Duration, Local, Timelike};
 use sqlite::{Connection, Error, State};
 
 use crate::utils::ok;
