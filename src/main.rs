@@ -44,6 +44,16 @@ fn cli() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("sync")
+                .about("Backup repository to a destination (USB, Drive...)")
+                .arg(
+                    Arg::new("path")
+                        .required(true)
+                        .action(ArgAction::Set)
+                        .help("Destination path"),
+                ),
+        )
+        .subcommand(
             Command::new("branch")
                 .about("Create a new branch")
                 .arg(Arg::new("name").required(true).action(ArgAction::Set)),
@@ -277,6 +287,13 @@ fn main() -> Result<(), Error> {
                     Ok(())
                 }
             }
+        }
+        Some(("sync", args)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
+            let path = args.get_one::<String>("path").unwrap();
+            return vcs::sync(&conn, path);
         }
         _ => {
             args.clone().print_help().expect("failed to print the help");
