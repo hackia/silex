@@ -11,6 +11,7 @@ use crate::utils::ok;
 pub mod db;
 pub mod utils;
 pub mod vcs;
+pub mod web;
 
 fn cli() -> Command {
     Command::new("silex")
@@ -106,6 +107,14 @@ fn cli() -> Command {
                         ),
                 )
                 .subcommand(Command::new("list").about("List all tags")),
+        )
+        .subcommand(
+            Command::new("web").about("Start the web interface").arg(
+                Arg::new("port")
+                    .short('p')
+                    .default_value("3000")
+                    .action(ArgAction::Set),
+            ),
         )
 }
 
@@ -294,6 +303,27 @@ fn main() -> Result<(), Error> {
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
             let path = args.get_one::<String>("path").unwrap();
             return vcs::sync(&conn, path);
+        }
+        Some(("web", args)) => {
+            let current_dir = std::env::current_dir()?;
+            let current_dir_str = current_dir.to_str().unwrap();
+
+            // On vérifie que c'est un dépôt Silex
+            if !Path::new(".silex").exists() {
+                return Err(Error::other("Not a silex repository."));
+            }
+
+            let port: u16 = args
+                .get_one::<String>("port")
+                .unwrap()
+                .parse()
+                .unwrap_or(3000);
+
+            // On lance le moteur Asynchrone juste pour cette commande
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(crate::web::start_server(current_dir_str, port));
+
+            Ok(())
         }
         _ => {
             args.clone().print_help().expect("failed to print the help");
