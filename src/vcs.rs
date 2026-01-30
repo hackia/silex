@@ -25,6 +25,132 @@ pub struct ManifestEntry {
     perm: i64,
 }
 
+// --- GESTION GIT FLOW (OPTIMISÉE) ---
+
+pub fn hotfix_start(conn: &Connection, name: &str) -> Result<(), Error> {
+    let branch_name = format!("hotfix/{}", name);
+    let source_branch = "main"; // CONTRAINTE : Un hotfix part toujours de la prod
+
+    // 1. On vérifie qu'on part bien de 'main' pour avoir la base saine
+    let (main_id, _) = get_branch_head_info(conn, source_branch)?;
+    if main_id.is_none() {
+        return Err(Error {
+            code: Some(1),
+            message: Some(String::from("No main branches has been founded")),
+        });
+    }
+
+    // 2. On crée la branche manuellement (sans utiliser create_branch qui utilise HEAD)
+    let query = "INSERT INTO branches (name, head_commit_id) VALUES (?, ?)";
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, branch_name.as_str()))?;
+    stmt.bind((2, main_id.unwrap()))?;
+
+    match stmt.next() {
+        Ok(_) => {} // Création OK
+        Err(_) => {
+            return Err(Error {
+                code: Some(1),
+                message: Some(String::from("hotfix already exist")),
+            });
+        }
+    }
+
+    // 3. On bascule dessus
+    checkout(conn, &branch_name)?;
+
+    ok(&format!(
+        "Hotfix started: Switched to '{branch_name}' from 'main'"
+    ));
+    Ok(())
+}
+
+pub fn hotfix_finish(conn: &Connection, name: &str) -> Result<(), Error> {
+    // C'est la même logique que feature_finish, mais sémantiquement distinct
+    let hotfix_branch = format!("hotfix/{}", name);
+    let target_branch = "main";
+
+    let (hf_head_id, _) = get_branch_head_info(conn, &hotfix_branch)?;
+    if hf_head_id.is_none() {
+        return Err(Error {
+            code: Some(1),
+            message: Some(String::from("hotfix not exist")),
+        });
+    }
+
+    ok(format!("Switching to '{target_branch}' to apply hotfix...").as_str());
+    checkout(conn, target_branch)?;
+
+    // Fast-Forward Merge
+    let query = "UPDATE branches SET head_commit_id = ? WHERE name = ?";
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, hf_head_id.unwrap()))?;
+    stmt.bind((2, target_branch))?;
+    stmt.next()?;
+
+    ok("Hotfix applied to main");
+
+    // Nettoyage
+    let delete_query = "DELETE FROM branches WHERE name = ?";
+    let mut del_stmt = conn.prepare(delete_query)?;
+    del_stmt.bind((1, hotfix_branch.as_str()))?;
+    del_stmt.next()?;
+    ok(&format!("Hotfix '{}' finished and branch deleted.", name));
+    Ok(())
+}
+
+pub fn feature_start(conn: &Connection, name: &str) -> Result<(), Error> {
+    // 1. Standardisation du nom : feature/nom
+    let branch_name = format!("feature/{}", name);
+
+    // 2. On crée la branche (basée sur le HEAD actuel)
+    // create_branch gère déjà l'erreur si elle existe
+    create_branch(conn, &branch_name)?;
+
+    // 3. On bascule dessus immédiatement (Optimisation UX)
+    checkout(conn, &branch_name)?;
+
+    ok(&format!("Flow started: You are now on '{branch_name}'"));
+    Ok(())
+}
+
+pub fn feature_finish(conn: &Connection, name: &str) -> Result<(), Error> {
+    let feat_branch = format!("feature/{}", name);
+    let target_branch = "main"; // Ou "dev" selon ta philosophie
+
+    // 1. Sécurité : On vérifie que la branche feature existe
+    let (feat_head_id, _) = get_branch_head_info(conn, &feat_branch)?;
+    if feat_head_id.is_none() {
+        return Err(Error {
+            code: Some(1),
+            message: Some(String::from("main branch not exist")),
+        });
+    }
+
+    // 2. On bascule sur 'main' pour préparer la fusion
+    ok(format!("Switching to '{target_branch}' to merge changes...").as_str());
+    checkout(conn, target_branch)?;
+
+    // 3. LE FAST-FORWARD (L'optimisation ultime)
+    // Au lieu de calculer un diff, on déplace juste le pointeur de main sur la tête de la feature
+    let query = "UPDATE branches SET head_commit_id = ? WHERE name = ?";
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, feat_head_id.unwrap()))?;
+    stmt.bind((2, target_branch))?;
+    stmt.next()?;
+
+    ok("Fast-forward merge complete");
+
+    // 4. Nettoyage : On supprime la branche temporaire
+    let delete_query = "DELETE FROM branches WHERE name = ?";
+    let mut del_stmt = conn.prepare(delete_query)?;
+    del_stmt.bind((1, feat_branch.as_str()))?;
+    del_stmt.next()?;
+
+    ok(&format!("Feature '{name}' finished and branch deleted."));
+    Ok(())
+}
+
 pub fn create_branch(conn: &Connection, new_branch_name: &str) -> Result<(), Error> {
     // 1. On récupère la branche actuelle et son commit ID
     let current_branch = crate::db::get_current_branch(conn).map_err(|e| e)?;
@@ -45,7 +171,7 @@ pub fn create_branch(conn: &Connection, new_branch_name: &str) -> Result<(), Err
             ),
         }
     } else {
-        println!("Cannot branch from an empty repository. Commit something first.");
+        ok("Cannot branch from an empty repository. Commit something first.");
     }
     Ok(())
 }
@@ -66,8 +192,8 @@ pub fn checkout(conn: &Connection, target_branch: &str) -> Result<(), Error> {
 
     let status_list = status(conn, current_dir.to_str().unwrap(), &current_branch)?;
     if !status_list.is_empty() {
-        println!("\x1b[1;31mError:\x1b[0m Your changes would be overwritten by checkout.");
-        println!("Please commit your changes or stash them first.");
+        ok("Your changes would be overwritten by checkout.");
+        ok("Please commit your changes or stash them first.");
         return Ok(());
     }
 
@@ -79,10 +205,7 @@ pub fn checkout(conn: &Connection, target_branch: &str) -> Result<(), Error> {
     // Si la branche cible n'existe pas
     if target_head_id.is_none() && target_branch != "main" {
         // Hack si repo vide
-        println!(
-            "\x1b[1;31mError:\x1b[0m Branch '{}' not found.",
-            target_branch
-        );
+        ok(format!("Branch '{target_branch}' not found.").as_str());
         return Ok(());
     }
 
@@ -91,7 +214,7 @@ pub fn checkout(conn: &Connection, target_branch: &str) -> Result<(), Error> {
     let current_files = get_manifest_map(conn, current_head_id)?;
     let target_files = get_manifest_map(conn, target_head_id)?;
 
-    println!("Switched to branch '{}'", target_branch);
+    ok(format!("Switched to branch '{target_branch}'").as_str());
 
     // 3. MISE À JOUR DU DISQUE (Différentiel)
 

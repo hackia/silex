@@ -53,6 +53,34 @@ fn cli() -> Command {
                 .about("Switch branches or restore working tree files")
                 .arg(Arg::new("name").required(true).action(ArgAction::Set)),
         )
+        .subcommand(
+            Command::new("feat")
+                .about("Manage feature branches")
+                .subcommand(
+                    Command::new("start")
+                        .about("Start a new feature")
+                        .arg(Arg::new("name").required(true).action(ArgAction::Set)),
+                )
+                .subcommand(
+                    Command::new("finish")
+                        .about("Merge and close a feature")
+                        .arg(Arg::new("name").required(true).action(ArgAction::Set)),
+                ),
+        )
+        .subcommand(
+            Command::new("hotfix")
+                .about("Manage hotfix branches")
+                .subcommand(
+                    Command::new("start")
+                        .about("Start a critical fix from main")
+                        .arg(Arg::new("name").required(true).action(ArgAction::Set)),
+                )
+                .subcommand(
+                    Command::new("finish")
+                        .about("Apply fix to main and close")
+                        .arg(Arg::new("name").required(true).action(ArgAction::Set)),
+                ),
+        )
 }
 
 fn perform_commit(args: &ArgMatches) -> Result<(), Error> {
@@ -170,6 +198,47 @@ fn main() -> Result<(), Error> {
                 connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
             let name = sub_matches.get_one::<String>("name").unwrap();
             return vcs::checkout(&conn, name).map_err(|e| Error::other(e.to_string()));
+        }
+        Some(("feat", sub_matches)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
+
+            // On regarde la SOUS-commande (start ou finish)
+            match sub_matches.subcommand() {
+                Some(("start", args)) => {
+                    let name = args.get_one::<String>("name").unwrap();
+                    return vcs::feature_start(&conn, name)
+                        .map_err(|e| Error::other(e.to_string()));
+                }
+                Some(("finish", args)) => {
+                    let name = args.get_one::<String>("name").unwrap();
+                    return vcs::feature_finish(&conn, name)
+                        .map_err(|e| Error::other(e.to_string()));
+                }
+                _ => {
+                    println!("Please specify 'start' or 'finish'.");
+                    Ok(())
+                }
+            }
+        }
+        Some(("hotfix", sub_matches)) => {
+            let current_dir = std::env::current_dir()?;
+            let conn =
+                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
+
+            match sub_matches.subcommand() {
+                Some(("start", args)) => {
+                    let name = args.get_one::<String>("name").unwrap();
+                    return vcs::hotfix_start(&conn, name).map_err(|e| Error::other(e.to_string()));
+                }
+                Some(("finish", args)) => {
+                    let name = args.get_one::<String>("name").unwrap();
+                    return vcs::hotfix_finish(&conn, name)
+                        .map_err(|e| Error::other(e.to_string()));
+                }
+                _ => Ok(()),
+            }
         }
         _ => {
             args.clone().print_help().expect("failed to print the help");
