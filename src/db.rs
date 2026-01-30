@@ -130,7 +130,8 @@ CREATE TABLE IF NOT EXISTS system_logs (
     message TEXT NOT NULL,
     metadata JSON,
     trace_id TEXT
-=======================================================================
+);        
+-- ====================================================================
 -- PARTIE 5 : CLASSEMENT DES CONTRIBUTEURS
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS contributor_stats (
