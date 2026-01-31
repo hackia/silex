@@ -9,14 +9,55 @@ use similar::{ChangeTag, TextDiff};
 use sqlite::Connection;
 use sqlite::Error;
 use sqlite::State;
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::fs;
 use std::fs::File;
 use std::fs::create_dir_all;
 use std::io::Error as IoError; // On renomme pour clarifier
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
+use tabled::{Table, Tabled};
 use uuid::Uuid;
+
+struct Node {
+    children: BTreeMap<String, Node>,
+}
+
+impl Node {
+    fn new() -> Self {
+        Node {
+            children: BTreeMap::new(),
+        }
+    }
+
+    // Fonction pour insérer un chemin "src/main.rs" dans l'arbre
+    fn insert(&mut self, path: &str) {
+        let parts: Vec<&str> = path.split('/').collect();
+        let mut current_node = self;
+
+        for part in parts {
+            current_node = current_node
+                .children
+                .entry(part.to_string())
+                .or_insert_with(Node::new);
+        }
+    }
+}
+
+#[derive(Tabled)]
+struct LogEntry {
+    #[tabled(rename = "Hash")]
+    hash: String,
+    #[tabled(rename = "Author")]
+    author: String,
+    #[tabled(rename = "Message")]
+    message: String,
+    #[tabled(rename = "Date")]
+    date: String,
+}
 
 #[derive(Debug)]
 pub enum FileStatus {
@@ -25,6 +66,7 @@ pub enum FileStatus {
     Deleted(PathBuf, i64),  // Existe en base mais plus sur disque
     Unchanged,
 }
+
 pub struct ManifestEntry {
     path: String,
     blob_id: i64,
@@ -82,8 +124,7 @@ pub fn tag_create(conn: &Connection, name: &str, message: Option<&str>) -> Resul
 
     match stmt.next() {
         Ok(_) => ok(&format!(
-            "Tag '{}' created on commit {}",
-            name,
+            "Tag '{name}' created on commit {}",
             &head_hash[0..7]
         )),
         Err(_) => return Err(IoError::other(format!("Tag '{name}' already exists."))),
@@ -194,7 +235,7 @@ pub fn hotfix_finish(conn: &Connection, name: &str) -> Result<(), Error> {
     let mut del_stmt = conn.prepare(delete_query)?;
     del_stmt.bind((1, hotfix_branch.as_str()))?;
     del_stmt.next()?;
-    ok(&format!("Hotfix '{}' finished and branch deleted.", name));
+    ok(&format!("Hotfix '{name}' finished and branch deleted."));
     Ok(())
 }
 
@@ -213,7 +254,7 @@ pub fn feature_start(conn: &Connection, name: &str) -> Result<(), Error> {
 
 pub fn feature_finish(conn: &Connection, name: &str) -> Result<(), Error> {
     let feat_branch = format!("feature/{}", name);
-    let target_branch = "main"; // Ou "dev" selon ta philosophie
+    let target_branch = "main";
 
     // 1. Sécurité : On vérifie que la branche feature existe
     let (feat_head_id, _) = get_branch_head_info(conn, &feat_branch)?;
@@ -524,53 +565,134 @@ fn get_file_content_from_head(
     }
 }
 
-pub fn log(conn: &Connection) -> Result<(), Error> {
-    // 1. Trouver où on est (HEAD de la branche actuelle
-    let current_branch = get_current_branch(conn).expect("failed to get current branch");
-    // On réutilise ta fonction helper pour avoir le hash du dernier commit
-    let (_, mut current_hash) = get_branch_head_info(conn, &current_branch)?;
+pub fn log(conn: &Connection, page: usize, per_page: usize) -> Result<(), sqlite::Error> {
+    // Calcul de l'offset (Page 1 = Offset 0)
+    let offset = (page - 1) * per_page;
 
-    if current_hash.is_empty() {
-        ok("No commits yet.");
-        return Ok(());
+    // Requête avec LIMIT et OFFSET
+    let query = "
+        SELECT hash, author, message, timestamp 
+        FROM commits 
+        ORDER BY timestamp DESC 
+        LIMIT ? OFFSET ?";
+
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, per_page as i64))?;
+    stmt.bind((2, offset as i64))?;
+
+    let mut logs = Vec::new();
+    while let Ok(State::Row) = stmt.next() {
+        // On tronque le hash pour l'affichage (7 premiers chars)
+        let full_hash: String = stmt.read(0)?;
+        let short_hash = if full_hash.len() > 7 {
+            full_hash[0..7].to_string()
+        } else {
+            full_hash
+        };
+        logs.push(LogEntry {
+            hash: short_hash,
+            author: stmt.read(1)?,
+            message: stmt.read(2)?,
+            date: stmt.read(3)?,
+        });
     }
 
-    println!(
-        "Historique pour la branche \x1b[1;36m{}\x1b[0m :\n",
-        current_branch
-    );
-
-    // 2. La boucle temporelle (On remonte les parents)
-    while !current_hash.is_empty() {
-        let query = "
-            SELECT hash, author, message, timestamp, parent_hash 
-            FROM commits 
-            WHERE hash = ?
-        ";
-        let mut stmt = conn.prepare(query)?;
-        stmt.bind((1, current_hash.as_str()))?;
-
-        if let Ok(State::Row) = stmt.next() {
-            let hash: String = stmt.read("hash")?;
-            let author: String = stmt.read("author")?;
-            let message: String = stmt.read("message")?;
-            let date: String = stmt.read("timestamp")?;
-            let parent: Option<String> = stmt.read("parent_hash").ok();
-
-            // Affichage stylé (façon Git)
-            println!("\x1b[33mcommit {}\x1b[0m", hash);
-            println!("Author: {}", author);
-            println!("Date:   {}", date);
-            println!("\n    {}\n", message);
-            println!("\x1b[90m----------------------------------------\x1b[0m");
-
-            // 3. On passe au père (Remonter le temps)
-            current_hash = parent.unwrap_or_default();
+    if logs.is_empty() {
+        if page == 1 {
+            ok("please commit first");
         } else {
-            break; // Plus de commit trouvé (ne devrait pas arriver si l'intégrité est bonne)
+            ok(format!("Aucun commit sur la page {page}.").as_str());
+        }
+    } else {
+        let x = logs.len();
+        println!("{}", Table::new(&logs).to_string());
+        if x >= 120 {
+            ok(format!(
+                "\nPage {page} ({}/{per_page} commits). Use --page {} for see the suite.",
+                x,
+                page + 1
+            )
+            .as_str());
         }
     }
     Ok(())
+}
+
+pub fn files() -> Vec<String> {
+    let mut all: Vec<String> = Vec::new();
+    let walk = ignore::WalkBuilder::new(".")
+        .standard_filters(true)
+        .threads(4)
+        .add_custom_ignore_filename("silexium")
+        .hidden(true)
+        .build();
+    let files = walk.collect::<Vec<Result<DirEntry, ignore::Error>>>();
+    for file in files.iter().flatten() {
+        if file.path().ends_with(".") {
+            continue;
+        }
+        all.push(
+            file.path()
+                .strip_prefix("./")
+                .expect("failed to strip prefix")
+                .to_str()
+                .expect("failed to get path")
+                .to_string(),
+        );
+    }
+    all
+}
+
+fn print_children(node: &Node, prefix: &str) {
+    // 1. On récupère les enfants dans un vecteur pour pouvoir les trier
+    let mut children_vec: Vec<_> = node.children.iter().collect();
+
+    // 2. LE TRI MAGIQUE : Dossiers d'abord, puis ordre alphabétique
+    children_vec.sort_by(|(name_a, node_a), (name_b, node_b)| {
+        // Est-ce que c'est un dossier ? (S'il a des enfants, c'est un dossier)
+        let a_is_dir = !node_a.children.is_empty();
+        let b_is_dir = !node_b.children.is_empty();
+
+        if a_is_dir && !b_is_dir {
+            Ordering::Less // A est un dossier, B non -> A passe avant
+        } else if !a_is_dir && b_is_dir {
+            Ordering::Greater // B est un dossier, A non -> B passe avant
+        } else {
+            name_a.cmp(name_b) // Sinon, tri alphabétique classique
+        }
+    });
+
+    let count = children_vec.len();
+
+    // 3. On itère sur notre vecteur trié
+    for (i, (name, child)) in children_vec.into_iter().enumerate() {
+        let is_last = i == count - 1;
+        let connector = if is_last { "└── " } else { "├── " };
+
+        println!("{}{}{}", prefix, connector, name);
+
+        let child_prefix = if is_last {
+            format!("{}    ", prefix)
+        } else {
+            format!("{}│   ", prefix)
+        };
+
+        print_children(child, &child_prefix);
+    }
+}
+
+pub fn ls_tree() {
+    let files = files(); // Ton Vec<String>
+    // 1. Construction de l'arbre (comme avant)
+    let mut root = Node::new();
+    for path in files {
+        root.insert(&path);
+    }
+    // 2. On affiche la racine MANUELLEMENT (sans préfixe, sans connecteur)
+    println!(".");
+
+    // 3. On lance la récursion pour le contenu, avec un préfixe vide ""
+    print_children(&root, "");
 }
 
 pub fn commit(conn: &Connection, message: &str, author: &str) -> Result<(), Error> {
@@ -583,6 +705,7 @@ pub fn commit(conn: &Connection, message: &str, author: &str) -> Result<(), Erro
     let root_path = ".";
     let walk = ignore::WalkBuilder::new(root_path)
         .add_custom_ignore_filename("silexium")
+        .threads(4)
         .standard_filters(true)
         .build();
 

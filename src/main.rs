@@ -10,6 +10,7 @@ use crate::chat::list_messages;
 use crate::chat::send_message;
 use crate::db::{SILEX_INIT, connect_silex, get_current_branch};
 use crate::utils::ok;
+use crate::vcs::ls_tree;
 
 pub mod chat;
 pub mod db;
@@ -25,7 +26,27 @@ fn cli() -> Command {
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand(Command::new("new").about("create a new silex project"))
         .subcommand(Command::new("status").about("show changes in working directory"))
-        .subcommand(Command::new("log").about("Show commit logs"))
+        .subcommand(Command::new("tree").about("Show repository"))
+        .subcommand(
+            Command::new("log")
+                .about("Show commit logs")
+                .arg(
+                    Arg::new("page")
+                        .short('p')
+                        .long("page")
+                        .value_parser(clap::value_parser!(usize))
+                        .default_value("1")
+                        .help("Page number (default: 1)"),
+                )
+                .arg(
+                    Arg::new("limit")
+                        .short('n')
+                        .long("limit")
+                        .value_parser(clap::value_parser!(usize))
+                        .default_value("120") // Ta demande spécifique
+                        .help("Number of commits per page"),
+                ),
+        )
         .subcommand(Command::new("diff").about("Show changes between working tree and last commit"))
         .subcommand(
             Command::new("todo")
@@ -232,6 +253,10 @@ fn main() -> Result<(), Error> {
     let app = args.clone().get_matches();
     match app.subcommand() {
         Some(("new", _)) => new_project(),
+        Some(("tree", _)) => {
+            ls_tree();
+            Ok(())
+        }
         Some(("status", _)) => check_status(),
         Some(("chat", sub)) => {
             let sender = std::env::var("USER").expect("USER must be defined");
@@ -272,11 +297,13 @@ fn main() -> Result<(), Error> {
                 Err(Error::other("commit not accepted"))
             }
         }
-        Some(("log", _)) => {
-            let current_dir = std::env::current_dir()?;
-            let conn =
-                connect_silex(current_dir.as_path()).map_err(|e| Error::other(e.to_string()))?;
-            vcs::log(&conn).map_err(|e| Error::other(e.to_string()))
+        Some(("log", args)) => {
+            let page = *args.get_one::<usize>("page").unwrap();
+            let limit = *args.get_one::<usize>("limit").unwrap();
+            let conn = connect_silex(Path::new(".")).expect("failed to connect to the database");
+            // On appelle la nouvelle signature
+            vcs::log(&conn, page, limit).expect("failed to parse log");
+            Ok(())
         }
         Some(("diff", _)) => {
             let current_dir = std::env::current_dir()?;
