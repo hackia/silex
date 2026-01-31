@@ -1,7 +1,7 @@
 use crate::db;
 use crate::utils::ok;
 use crate::vcs;
-use git2::{ObjectType, Repository, Tree};
+use git2::{FetchOptions, ObjectType, Repository, Tree, build::RepoBuilder};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -16,24 +16,38 @@ pub fn extract_repo_name(url: &str) -> String {
         .to_string()
 }
 
-pub fn import_from_git(git_url: &str, target_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    ok(format!("Clonage de {git_url}...").as_str());
-
-    // Dossier temporaire pour le clone
+pub fn import_from_git(
+    git_url: &str,
+    target_dir: &Path,
+    depth: Option<i32>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ok(format!("Clonage de {git_url} (Depth: {:?})...", depth.unwrap_or(0)).as_str());
     let temp_path = target_dir.join("temp_git_import");
     if temp_path.exists() {
         std::fs::remove_dir_all(&temp_path)?;
     }
 
-    let repo = Repository::clone(git_url, &temp_path)?;
+    // --- CONFIGURATION DU CLONE (Shallow) ---
+    let mut fetch_options = FetchOptions::new();
+
+    // Si une profondeur est spécifiée, on limite l'historique (ex: 100 derniers commits)
+    if let Some(d) = depth {
+        fetch_options.depth(d);
+    }
+
+    let mut builder = RepoBuilder::new();
+    builder.fetch_options(fetch_options);
+
+    // On lance le clone avec les options
+    let repo = builder.clone(git_url, &temp_path)?;
+    // ----------------------------------------
+
     let mut revwalk = repo.revwalk()?;
-    revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?; // Important : du plus vieux au plus récent
+    revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
     revwalk.push_head()?;
 
-    // Connexion à la DB Silex
-    let conn = db::connect_silex(target_dir).expect("failed tp connect to the database");
+    let conn = db::connect_silex(target_dir).expect("failed to connect to the database");
     conn.execute(db::SILEX_INIT)?;
-    // Mémoire des Assets : "src/main.rs" -> AssetID(42)
     let mut path_to_asset: HashMap<String, i64> = HashMap::new();
     ok("importing history...");
 

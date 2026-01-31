@@ -70,6 +70,13 @@ fn cli() -> Command {
                     Arg::new("name")
                         .required(false)
                         .help("Target directory name"),
+                )
+                .arg(
+                    Arg::new("depth")
+                        .long("depth")
+                        .short('d')
+                        .value_parser(clap::value_parser!(i32))
+                        .help("Truncate history to the specified number of commits"),
                 ),
         )
         .subcommand(Command::new("health").about("Check the source code"))
@@ -281,10 +288,11 @@ fn main() -> Result<(), Error> {
     let app = args.clone().get_matches();
     match app.subcommand() {
         Some(("new", _)) => new_project(),
-
-        // Dans le match matches.subcommand()
         Some(("clone", args)) => {
             let url = args.get_one::<String>("url").unwrap();
+
+            // Récupération de la depth
+            let depth = args.get_one::<i32>("depth").copied();
 
             // 1. Déterminer le nom du dossier (soit l'arg, soit déduit de l'URL)
             let dir_name = if let Some(name) = args.get_one::<String>("name") {
@@ -306,10 +314,14 @@ fn main() -> Result<(), Error> {
             std::fs::create_dir(&target_path)?;
 
             // 4. Lancer l'import DANS ce dossier
-            // Note : import_from_git s'occupe du reste (init DB + clone temp + checkout)
-            git::import_from_git(url, &target_path).expect("failed to clone");
+            // ... (Logique de nom de dossier identique) ...
+            // ... (Création dossier identique) ...
+
+            // Appel avec le nouveau paramètre
+            git::import_from_git(url, &target_path, depth).expect("failed to clone");
             Ok(())
         }
+        // Dans le match matches.subcommand()
         Some(("tree", _)) => {
             let current_dir = std::env::current_dir()?;
             tree::scan_and_print_tree(&current_dir);
