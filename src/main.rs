@@ -12,6 +12,7 @@ use crate::db::{SILEX_INIT, connect_silex, get_current_branch};
 use crate::utils::ok;
 
 pub mod chat;
+pub mod crypto;
 pub mod db;
 pub mod todo;
 pub mod tree;
@@ -27,6 +28,9 @@ fn cli() -> Command {
         .subcommand(Command::new("new").about("create a new silex project"))
         .subcommand(Command::new("status").about("show changes in working directory"))
         .subcommand(Command::new("tree").about("Show repository"))
+        .subcommand(
+            Command::new("keygen").about("Generate Ed25519 identity keys for signing commits"),
+        )
         .subcommand(
             Command::new("log")
                 .about("Show commit logs")
@@ -258,6 +262,11 @@ fn main() -> Result<(), Error> {
             tree::scan_and_print_tree(&current_dir);
             Ok(())
         }
+        Some(("keygen", _)) => {
+            let current_dir = std::env::current_dir()?;
+            crypto::generate_keypair(&current_dir).expect("failed to create keys");
+            Ok(())
+        }
         Some(("status", _)) => check_status(),
         Some(("chat", sub)) => {
             let sender = std::env::var("USER").expect("USER must be defined");
@@ -292,8 +301,8 @@ fn main() -> Result<(), Error> {
             }
         }
         Some(("commit", sub_matches)) => {
-            if run_hooks().is_ok() && perform_commit(sub_matches).is_ok() {
-                Ok(())
+            if run_hooks().is_ok() {
+                perform_commit(&sub_matches)
             } else {
                 Err(Error::other("commit not accepted"))
             }

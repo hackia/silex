@@ -34,6 +34,7 @@ pub const SILEX_INIT: &str = "
         author TEXT NOT NULL,
         message TEXT NOT NULL,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        signature TEXT,
         FOREIGN KEY(parent_hash) REFERENCES commits(hash)
     );
 

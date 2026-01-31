@@ -712,7 +712,12 @@ pub fn commit(conn: &Connection, message: &str, author: &str) -> Result<(), Erro
         .to_hex()
         .to_string();
 
-    let query_commit = "INSERT INTO commits (hash, parent_hash, author, message, timestamp) VALUES (?, ?, ?, ?, ?) RETURNING id;";
+    let signature = match crate::crypto::sign_message(Path::new(root_path), commit_hash.as_str()) {
+        Ok(sig) => sig,
+        Err(_) => String::from("UNSIGNED"),
+    };
+
+    let query_commit = "INSERT INTO commits (hash, parent_hash, author, message, timestamp, signature) VALUES (?, ?, ?, ?, ?, ?) RETURNING id;";
     let mut stmt = conn.prepare(query_commit)?;
     stmt.bind((1, commit_hash.as_str()))?;
     stmt.bind((
@@ -726,6 +731,7 @@ pub fn commit(conn: &Connection, message: &str, author: &str) -> Result<(), Erro
     stmt.bind((3, author))?;
     stmt.bind((4, message))?;
     stmt.bind((5, timestamp.as_str()))?;
+    stmt.bind((6, signature.as_str()))?;
     stmt.next()?;
     let new_commit_id: i64 = stmt.read("id")?;
 
