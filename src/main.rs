@@ -28,6 +28,7 @@ fn cli() -> Command {
         .about("An new vcs")
         .author("Saigo Ekitae <saigoekitae@gmail.com>")
         .version(env!("CARGO_PKG_VERSION"))
+        .subcommand(Command::new("init").about("Initialize current directory"))
         .subcommand(Command::new("new").about("create a new silex project"))
         .subcommand(Command::new("status").about("show changes in working directory"))
         .subcommand(Command::new("tree").about("Show repository"))
@@ -288,6 +289,21 @@ fn main() -> Result<(), Error> {
     let app = args.clone().get_matches();
     match app.subcommand() {
         Some(("new", _)) => new_project(),
+        Some(("init", _)) => {
+            let current_dir = std::env::current_dir()?;
+            let path_str = current_dir.to_str().unwrap();
+            // Logique d'initialisation directe ici (copiée de new_project sans le prompt)
+            if connect_silex(Path::new(path_str))
+                .expect("fail")
+                .execute(SILEX_INIT)
+                .is_ok()
+            {
+                ok("Initialized empty Silex repository");
+                Ok(())
+            } else {
+                Err(Error::other("Failed to init"))
+            }
+        }
         Some(("clone", args)) => {
             let url = args.get_one::<String>("url").unwrap();
 
