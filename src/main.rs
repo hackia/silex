@@ -54,7 +54,7 @@ fn cli() -> Command {
                 ),
         )
         .subcommand(Command::new("diff").about("Show changes between working tree and last commit"))
-        .subcommand(Command::new("health").about("Sniff the code"))
+        .subcommand(Command::new("health").about("Check the source code"))
         .subcommand(
             Command::new("todo")
                 .about("Manage project tasks")
