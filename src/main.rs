@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::chat::list_messages;
 use crate::chat::send_message;
 use crate::db::{SILEX_INIT, connect_silex, get_current_branch};
+use crate::utils::ko;
 use crate::utils::ok;
 
 pub mod chat;
@@ -53,6 +54,7 @@ fn cli() -> Command {
                 ),
         )
         .subcommand(Command::new("diff").about("Show changes between working tree and last commit"))
+        .subcommand(Command::new("health").about("Sniff the code"))
         .subcommand(
             Command::new("todo")
                 .about("Manage project tasks")
@@ -306,20 +308,21 @@ fn main() -> Result<(), Error> {
         }
         Some(("audit", _)) => {
             let conn = connect_silex(Path::new(".")).expect("failed to connect to the databaase");
-            let x = crypto::audit(&conn).expect("failed to audit");
-            if x {
+            if crypto::audit(&conn).expect("failed to connect to the database") {
                 Ok(())
             } else {
                 Err(Error::other("audit detect failure"))
             }
         }
-        Some(("commit", sub_matches)) => {
+        Some(("health", _)) => {
             if run_hooks().is_ok() {
-                perform_commit(&sub_matches)
+                ok("code can be commited");
             } else {
-                Err(Error::other("commit not accepted"))
+                ko("code must not be commited");
             }
+            Ok(())
         }
+        Some(("commit", sub_matches)) => perform_commit(&sub_matches),
         Some(("log", args)) => {
             let page = *args.get_one::<usize>("page").unwrap();
             let limit = *args.get_one::<usize>("limit").unwrap();
