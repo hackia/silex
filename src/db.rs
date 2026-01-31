@@ -1,6 +1,10 @@
 use chrono::Datelike;
+use flate2::Compression;
+use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
 use sqlite::{Connection, Error, State};
 use std::fs::create_dir_all;
+use std::io::prelude::*;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -206,35 +210,6 @@ pub fn create_asset(conn: &Connection) -> Result<i64, Error> {
     Ok(stmt_id.read(0)?)
 }
 
-// Insère un contenu (Blob) s'il n'existe pas déjà, et retourne son ID
-pub fn get_or_insert_blob(conn: &Connection, content: &[u8]) -> Result<i64, Error> {
-    // 1. On calcule le hash Blake3 (Format Silex)
-    let hash = blake3::hash(content).to_string();
-
-    // 2. On vérifie s'il existe déjà (Déduplication)
-    let check_query = "SELECT id FROM store.blobs WHERE hash = ?";
-    let mut stmt = conn.prepare(check_query)?;
-    stmt.bind((1, hash.as_str()))?;
-
-    if let Ok(State::Row) = stmt.next() {
-        return Ok(stmt.read(0)?); // Il existe, on retourne son ID
-    }
-
-    // 3. Sinon, on l'insère
-    let insert_query = "INSERT INTO store.blobs (hash, content, size) VALUES (?, ?, ?)";
-    let mut stmt_ins = conn.prepare(insert_query)?;
-    stmt_ins.bind((1, hash.as_str()))?;
-    stmt_ins.bind((2, content))?;
-    stmt_ins.bind((3, content.len() as i64))?;
-    stmt_ins.next()?;
-
-    // Retourne l'ID inséré
-    let id_query = "SELECT last_insert_rowid()";
-    let mut stmt_id = conn.prepare(id_query)?;
-    stmt_id.next()?;
-    Ok(stmt_id.read(0)?)
-}
-
 // Lie un Commit + Asset + Blob dans le Manifeste
 pub fn insert_manifest_entry(
     conn: &Connection,
@@ -252,4 +227,51 @@ pub fn insert_manifest_entry(
     stmt.bind((4, path))?;
     stmt.next()?;
     Ok(())
+}
+
+// --- Helpers de compression ---
+pub fn compress(data: &[u8]) -> Vec<u8> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data).expect("Failed to compress blob");
+    encoder.finish().expect("Failed to finish compression")
+}
+
+pub fn decompress(data: &[u8]) -> Vec<u8> {
+    let mut decoder = ZlibDecoder::new(data);
+    let mut decoded = Vec::new();
+    // Astuce : Si la décompression échoue (vieux fichier non compressé), on retourne le brut
+    match decoder.read_to_end(&mut decoded) {
+        Ok(_) => decoded,
+        Err(_) => data.to_vec(),
+    }
+}
+
+// Modifie ta fonction get_or_insert_blob pour compresser
+pub fn get_or_insert_blob(conn: &Connection, content: &[u8]) -> Result<i64, Error> {
+    // 1. On calcule le hash sur le contenu ORIGINAL (pour que le hash reste stable)
+    let hash = blake3::hash(content).to_string();
+
+    // 2. Vérif existence... (inchangé)
+    let check_query = "SELECT id FROM store.blobs WHERE hash = ?";
+    let mut stmt = conn.prepare(check_query)?;
+    stmt.bind((1, hash.as_str()))?;
+    if let Ok(State::Row) = stmt.next() {
+        return Ok(stmt.read(0)?);
+    }
+
+    // 3. Compression avant insertion !
+    let compressed_content = compress(content); // <--- LA MAGIE EST ICI
+
+    let insert_query = "INSERT INTO store.blobs (hash, content, size) VALUES (?, ?, ?)";
+    let mut stmt_ins = conn.prepare(insert_query)?;
+    stmt_ins.bind((1, hash.as_str()))?;
+    stmt_ins.bind((2, &compressed_content[..]))?; // On stocke le compressé
+    stmt_ins.bind((3, content.len() as i64))?; // On garde la taille originale pour info
+    stmt_ins.next()?;
+
+    // ... retour ID (inchangé)
+    let id_query = "SELECT last_insert_rowid()";
+    let mut stmt_id = conn.prepare(id_query)?;
+    stmt_id.next()?;
+    Ok(stmt_id.read(0)?)
 }

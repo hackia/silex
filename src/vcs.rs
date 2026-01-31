@@ -1,4 +1,5 @@
 use crate::db::get_current_branch;
+use crate::utils::ko;
 use crate::utils::ok;
 use crate::utils::ok_status;
 use crate::utils::ok_tag;
@@ -100,7 +101,8 @@ pub fn checkout_head(conn: &Connection, root_path: &Path) -> Result<(), sqlite::
 
     while let Ok(State::Row) = stmt_files.next() {
         let path_str: String = stmt_files.read(0)?;
-        let content: Vec<u8> = stmt_files.read(1)?;
+        let raw_content: Vec<u8> = stmt_files.read(1)?;
+        let content = crate::db::decompress(&raw_content);
 
         let full_path = root_path.join(&path_str);
 
@@ -235,7 +237,7 @@ pub fn tag_list(conn: &Connection) -> Result<(), IoError> {
 // --- GESTION GIT FLOW (OPTIMISÉE) ---
 
 pub fn hotfix_start(conn: &Connection, name: &str) -> Result<(), Error> {
-    let branch_name = format!("hotfix/{}", name);
+    let branch_name = format!("hotfix/{name}");
     let source_branch = "main"; // CONTRAINTE : Un hotfix part toujours de la prod
 
     // 1. On vérifie qu'on part bien de 'main' pour avoir la base saine
@@ -274,7 +276,7 @@ pub fn hotfix_start(conn: &Connection, name: &str) -> Result<(), Error> {
 
 pub fn hotfix_finish(conn: &Connection, name: &str) -> Result<(), Error> {
     // C'est la même logique que feature_finish, mais sémantiquement distinct
-    let hotfix_branch = format!("hotfix/{}", name);
+    let hotfix_branch = format!("hotfix/{name}");
     let target_branch = "main";
 
     let (hf_head_id, _) = get_branch_head_info(conn, &hotfix_branch)?;
@@ -320,7 +322,7 @@ pub fn feature_start(conn: &Connection, name: &str) -> Result<(), Error> {
 }
 
 pub fn feature_finish(conn: &Connection, name: &str) -> Result<(), Error> {
-    let feat_branch = format!("feature/{}", name);
+    let feat_branch = format!("feature/{name}");
     let target_branch = "main";
 
     // 1. Sécurité : On vérifie que la branche feature existe
@@ -370,9 +372,7 @@ pub fn create_branch(conn: &Connection, new_branch_name: &str) -> Result<(), Err
 
         match stmt.next() {
             Ok(_) => ok(&format!("Branch '{new_branch_name}' created.")),
-            Err(_) => {
-                println!("\x1b[1;31mError:\x1b[0m Branch '{new_branch_name}' already exists.")
-            }
+            Err(_) => ko(format!("Error: branch '{new_branch_name}' already exists.").as_str()),
         }
     } else {
         ok("Cannot branch from an empty repository. Commit something first.");
@@ -466,11 +466,7 @@ pub fn checkout(conn: &Connection, target_ref: &str) -> Result<(), Error> {
         // C'est une vraie branche
         stmt.bind((1, target_ref))?;
     } else {
-        ok(format!(
-            "You are in 'Detached HEAD' state (viewing commit {}).",
-            target_ref
-        )
-        .as_str());
+        ok(format!("You are in 'Detached HEAD' state (viewing commit {target_ref}).").as_str());
         stmt.bind((1, "DETACHED"))?;
     }
     stmt.next()?;
@@ -508,7 +504,8 @@ fn get_blob_bytes_by_hash(conn: &Connection, hash: &str) -> Result<Option<Vec<u8
     let mut stmt = conn.prepare(query)?;
     stmt.bind((1, hash))?;
     if let Ok(State::Row) = stmt.next() {
-        Ok(Some(stmt.read("content")?))
+        let raw: Vec<u8> = stmt.read("content")?;
+        Ok(Some(crate::db::decompress(&raw)))
     } else {
         Ok(None)
     }
@@ -532,7 +529,8 @@ fn get_blob_bytes(conn: &Connection, branch: &str, path: &Path) -> Result<Option
     stmt.bind((2, relative_path.as_ref()))?;
 
     if let Ok(State::Row) = stmt.next() {
-        let content: Vec<u8> = stmt.read("content")?;
+        let raw_content: Vec<u8> = stmt.read("content")?;
+        let content = crate::db::decompress(&raw_content);
         Ok(Some(content))
     } else {
         Ok(None) // Le fichier n'existe pas dans le HEAD
@@ -550,12 +548,11 @@ pub fn restore(conn: &Connection, path_str: &str) -> Result<(), Error> {
             ok(&format!("Restored '{}' from HEAD.", path.display()));
         }
         None => {
-            // 3. Cas particulier : Le fichier n'est pas dans le HEAD (c'est un fichier purement nouveau)
-            // Dans ce cas, 'restore' ne peut rien faire (ou devrait proposer de le supprimer)
-            println!(
-                "\x1b[1;31mError:\x1b[0m File '{}' does not exist in the last commit.",
+            ko(format!(
+                "Error: File '{}' does not exist in the last commit.",
                 path.display()
-            );
+            )
+            .as_str());
         }
     }
     Ok(())
@@ -640,7 +637,8 @@ fn get_file_content_from_head(
 
     if let Ok(State::Row) = stmt.next() {
         // Attention : On suppose ici que c'est du texte (UTF-8)
-        let content_blob: Vec<u8> = stmt.read("content")?;
+        let raw_content_blob: Vec<u8> = stmt.read("content")?;
+        let content_blob = crate::db::decompress(&raw_content_blob);
         match String::from_utf8(content_blob) {
             Ok(s) => Ok(s),
             Err(_) => Ok(String::from("(Binary content)")),
@@ -686,7 +684,7 @@ pub fn log(conn: &Connection, page: usize, per_page: usize) -> Result<(), sqlite
         if page == 1 {
             ok("please commit first");
         } else {
-            ok(format!("Aucun commit sur la page {page}.").as_str());
+            ok(format!("No commits on {page} page.").as_str());
         }
     } else {
         let x = logs.len();
@@ -819,7 +817,7 @@ pub fn commit(conn: &Connection, message: &str, author: &str) -> Result<(), Erro
 
     // (Le reste du code reste identique : calcul hash, insert commits, insert manifest...)
     let timestamp = chrono::Utc::now().to_rfc3339();
-    let commit_hash_input = format!("{}{}{}{}", parent_hash, author, message, timestamp);
+    let commit_hash_input = format!("{parent_hash}{author}{message}{timestamp}");
     let commit_hash = blake3::hash(commit_hash_input.as_bytes())
         .to_hex()
         .to_string();
@@ -935,14 +933,14 @@ fn ensure_blob_exists(conn: &Connection, hash: &str, path: &Path, size: u64) -> 
     // Attention : lire tout le fichier en RAM pour l'insérer en BLOB peut être lourd.
     // Pour l'instant on fait simple :
     let content = std::fs::read(path).expect("failed to read file");
-
+    let compressed_content = crate::db::compress(&content);
     let insert_query = "
         INSERT INTO store.blobs (hash, content, size) 
         VALUES (?, ?, ?) 
         RETURNING id";
     let mut stmt_ins = conn.prepare(insert_query)?;
     stmt_ins.bind((1, hash))?;
-    stmt_ins.bind((2, &content[..]))?; // Bind byte array
+    stmt_ins.bind((2, &compressed_content[..]))?; // Bind byte array
     stmt_ins.bind((3, size as i64))?;
 
     stmt_ins.next()?;
