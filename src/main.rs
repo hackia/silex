@@ -9,12 +9,14 @@ use std::path::Path;
 use crate::chat::list_messages;
 use crate::chat::send_message;
 use crate::db::{SILEX_INIT, connect_silex, get_current_branch};
+use crate::git::extract_repo_name;
 use crate::utils::ko;
 use crate::utils::ok;
 
 pub mod chat;
 pub mod crypto;
 pub mod db;
+pub mod git;
 pub mod todo;
 pub mod tree;
 pub mod utils;
@@ -54,6 +56,22 @@ fn cli() -> Command {
                 ),
         )
         .subcommand(Command::new("diff").about("Show changes between working tree and last commit"))
+        .subcommand(
+            Command::new("clone")
+                .about("Clone a Git repository into a new Silex directory")
+                .arg(
+                    Arg::new("url")
+                        .required(true)
+                        .help("The git URL (https://...)")
+                        .action(ArgAction::Set),
+                )
+                // Optionnel : permettre de forcer un nom de dossier différent
+                .arg(
+                    Arg::new("name")
+                        .required(false)
+                        .help("Target directory name"),
+                ),
+        )
         .subcommand(Command::new("health").about("Check the source code"))
         .subcommand(
             Command::new("todo")
@@ -263,6 +281,35 @@ fn main() -> Result<(), Error> {
     let app = args.clone().get_matches();
     match app.subcommand() {
         Some(("new", _)) => new_project(),
+
+        // Dans le match matches.subcommand()
+        Some(("clone", args)) => {
+            let url = args.get_one::<String>("url").unwrap();
+
+            // 1. Déterminer le nom du dossier (soit l'arg, soit déduit de l'URL)
+            let dir_name = if let Some(name) = args.get_one::<String>("name") {
+                name.clone()
+            } else {
+                extract_repo_name(url)
+            };
+
+            let target_path = std::env::current_dir()?.join(&dir_name);
+
+            // 2. Vérifier si ça existe déjà pour ne pas écraser
+            if target_path.exists() {
+                ko("already exist");
+                return Ok(());
+            }
+
+            // 3. Créer le dossier
+            ok("Creation of the repository");
+            std::fs::create_dir(&target_path)?;
+
+            // 4. Lancer l'import DANS ce dossier
+            // Note : import_from_git s'occupe du reste (init DB + clone temp + checkout)
+            git::import_from_git(url, &target_path).expect("failed to clone");
+            Ok(())
+        }
         Some(("tree", _)) => {
             let current_dir = std::env::current_dir()?;
             tree::scan_and_print_tree(&current_dir);

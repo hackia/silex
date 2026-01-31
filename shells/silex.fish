@@ -17,6 +17,7 @@ complete -c silex -n __fish_use_subcommand -a tree -d 'Print the repository tree
 complete -c silex -n __fish_use_subcommand -a keygen -d 'Generate Ed25519 identity keys for signing commits'
 complete -c silex -n __fish_use_subcommand -a audit -d 'Verify all commits signatures'
 complete -c silex -n __fish_use_subcommand -a health -d 'Check source code'
+complete -c silex -n __fish_use_subcommand -a clone -d 'Clone a silex or a git repository'
 
 complete -c silex -n "__fish_seen_subcommand_from commit" -s m -l message -r -d 'Description of the changes'
 

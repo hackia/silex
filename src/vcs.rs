@@ -15,11 +15,11 @@ use std::fs;
 use std::fs::File;
 use std::fs::create_dir_all;
 use std::io::Error as IoError; // On renomme pour clarifier
+use std::io::Write;
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
 use tabled::{Table, Tabled};
 use uuid::Uuid;
-
 #[derive(Tabled)]
 struct LogEntry {
     #[tabled(rename = "Hash")]
@@ -70,6 +70,78 @@ pub fn sync(destination_path: &str) -> Result<(), IoError> {
     }
     ok("Backup complete");
     Ok(())
+}
+
+pub fn checkout_head(conn: &Connection, root_path: &Path) -> Result<(), sqlite::Error> {
+    ok("Bulding...");
+
+    // 1. Trouver le dernier commit (HEAD)
+    // On prend le plus grand ID, ce qui correspond au dernier inséré lors de l'import
+    let query_head = "SELECT id FROM commits ORDER BY id DESC LIMIT 1";
+    let mut stmt = conn.prepare(query_head)?;
+
+    let head_id: i64 = if let Ok(State::Row) = stmt.next() {
+        stmt.read(0)?
+    } else {
+        return Ok(()); // Pas de commits, rien à faire
+    };
+
+    // 2. Récupérer la liste des fichiers pour ce commit (Manifeste + Blobs)
+    // On joint manifest et blobs pour avoir le chemin ET le contenu
+    let query_files = "
+        SELECT m.file_path, b.content 
+        FROM manifest m
+        JOIN store.blobs b ON m.blob_id = b.id
+        WHERE m.commit_id = ?
+    ";
+
+    let mut stmt_files = conn.prepare(query_files)?;
+    stmt_files.bind((1, head_id))?;
+
+    while let Ok(State::Row) = stmt_files.next() {
+        let path_str: String = stmt_files.read(0)?;
+        let content: Vec<u8> = stmt_files.read(1)?;
+
+        let full_path = root_path.join(&path_str);
+
+        // Créer les dossiers parents si nécessaire (ex: src/ui/...)
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap(); // Ignorer erreur si existe déjà
+        }
+
+        // Écrire le fichier
+        let mut file = File::create(full_path).unwrap();
+        file.write_all(&content).unwrap();
+    }
+    ok("Clonned");
+    Ok(())
+}
+// Version spéciale de commit qui accepte une date explicite et retourne l'ID du commit
+pub fn commit_manual(
+    conn: &Connection,
+    message: &str,
+    author: &str,
+    timestamp: i64,
+) -> Result<i64, sqlite::Error> {
+    // Note: Pour faire simple ici, on ne calcule pas le hash parent/enfant complexe
+    // ni la signature crypto, car c'est un import massif.
+    // Dans une version prod, il faudrait recalculer le Merkle Hash ici.
+
+    let dummy_hash = format!("git-import-{}", Uuid::new_v4()); // Hash temporaire
+
+    let query = "INSERT INTO commits (hash, author, message, timestamp) VALUES (?, ?, ?, datetime(?, 'unixepoch'))";
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, dummy_hash.as_str()))?;
+    stmt.bind((2, author))?;
+    stmt.bind((3, message))?;
+    stmt.bind((4, timestamp))?;
+    stmt.next()?;
+
+    // On récupère l'ID pour remplir le manifest juste après
+    let id_query = "SELECT last_insert_rowid()";
+    let mut stmt_id = conn.prepare(id_query)?;
+    stmt_id.next()?;
+    Ok(stmt_id.read(0)?)
 }
 
 pub fn tag_create(conn: &Connection, name: &str, message: Option<&str>) -> Result<(), IoError> {

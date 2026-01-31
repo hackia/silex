@@ -2,6 +2,7 @@ use chrono::Datelike;
 use sqlite::{Connection, Error, State};
 use std::fs::create_dir_all;
 use std::path::Path;
+use uuid::Uuid;
 
 pub const SILEX_INIT: &str = "
     -- ====================================================================
@@ -188,4 +189,67 @@ pub fn connect_silex(root_path: &Path) -> Result<Connection, sqlite::Error> {
     conn.execute("PRAGMA store.cache_size = -200000;")?; // ~200Mo cache
 
     Ok(conn)
+}
+
+// Crée une nouvelle identité de fichier (Asset)
+pub fn create_asset(conn: &Connection) -> Result<i64, Error> {
+    let new_uuid = Uuid::new_v4().to_string();
+    let query = "INSERT INTO store.assets (uuid) VALUES (?)";
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, new_uuid.as_str()))?;
+    stmt.next()?;
+
+    // On retourne l'ID de la ligne insérée
+    let id_query = "SELECT last_insert_rowid()";
+    let mut stmt_id = conn.prepare(id_query)?;
+    stmt_id.next()?;
+    Ok(stmt_id.read(0)?)
+}
+
+// Insère un contenu (Blob) s'il n'existe pas déjà, et retourne son ID
+pub fn get_or_insert_blob(conn: &Connection, content: &[u8]) -> Result<i64, Error> {
+    // 1. On calcule le hash Blake3 (Format Silex)
+    let hash = blake3::hash(content).to_string();
+
+    // 2. On vérifie s'il existe déjà (Déduplication)
+    let check_query = "SELECT id FROM store.blobs WHERE hash = ?";
+    let mut stmt = conn.prepare(check_query)?;
+    stmt.bind((1, hash.as_str()))?;
+
+    if let Ok(State::Row) = stmt.next() {
+        return Ok(stmt.read(0)?); // Il existe, on retourne son ID
+    }
+
+    // 3. Sinon, on l'insère
+    let insert_query = "INSERT INTO store.blobs (hash, content, size) VALUES (?, ?, ?)";
+    let mut stmt_ins = conn.prepare(insert_query)?;
+    stmt_ins.bind((1, hash.as_str()))?;
+    stmt_ins.bind((2, content))?;
+    stmt_ins.bind((3, content.len() as i64))?;
+    stmt_ins.next()?;
+
+    // Retourne l'ID inséré
+    let id_query = "SELECT last_insert_rowid()";
+    let mut stmt_id = conn.prepare(id_query)?;
+    stmt_id.next()?;
+    Ok(stmt_id.read(0)?)
+}
+
+// Lie un Commit + Asset + Blob dans le Manifeste
+pub fn insert_manifest_entry(
+    conn: &Connection,
+    commit_id: i64,
+    asset_id: i64,
+    blob_id: i64,
+    path: &str,
+) -> Result<(), Error> {
+    let query =
+        "INSERT INTO manifest (commit_id, asset_id, blob_id, file_path) VALUES (?, ?, ?, ?)";
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, commit_id))?;
+    stmt.bind((2, asset_id))?;
+    stmt.bind((3, blob_id))?;
+    stmt.bind((4, path))?;
+    stmt.next()?;
+    Ok(())
 }

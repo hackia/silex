@@ -21,3 +21,4 @@ tokio = { version = "1.49.0", features = ["full"] }
 uuid = { version = "1.20.0", features = ["v4"] }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
+git2 = "0.20.3"
