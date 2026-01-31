@@ -246,7 +246,10 @@ fn new_project() -> Result<(), Error> {
         File::create_new(format!("{project}{MAIN_SEPARATOR_STR}silexium").as_str())
             .expect("failed to create file");
         ok("silexium file created successfully");
+        crypto::generate_keypair(Path::new(project.as_str())).expect("failed to generate keys");
+        ok("project keys has been generated successsfully");
         ok("project created successsfully");
+
         Ok(())
     } else {
         Err(Error::other("failed to create the sqlite database"))
@@ -303,8 +306,12 @@ fn main() -> Result<(), Error> {
         }
         Some(("audit", _)) => {
             let conn = connect_silex(Path::new(".")).expect("failed to connect to the databaase");
-            crypto::audit(&conn).expect("failed to audit");
-            Ok(())
+            let x = crypto::audit(&conn).expect("failed to audit");
+            if x {
+                Ok(())
+            } else {
+                Err(Error::other("audit detect failure"))
+            }
         }
         Some(("commit", sub_matches)) => {
             if run_hooks().is_ok() {

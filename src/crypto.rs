@@ -1,4 +1,4 @@
-use crate::utils::{ko, ok, ok_audit_commit};
+use crate::utils::{ko, ko_audit_commit, ok, ok_audit_commit};
 use ed25519_dalek::ed25519::signature::SignerMut;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
@@ -92,7 +92,7 @@ pub fn verify_signature(
     }
 }
 
-pub fn audit(conn: &Connection) -> Result<(), sqlite::Error> {
+pub fn audit(conn: &Connection) -> Result<bool, sqlite::Error> {
     println!();
     ok("Auditing commits...\n");
 
@@ -118,7 +118,7 @@ pub fn audit(conn: &Connection) -> Result<(), sqlite::Error> {
                     valid += 1;
                 }
                 Ok(false) => {
-                    ko(format!("[ {} ] bad signature", &hash[0..7]).as_str());
+                    ko_audit_commit(&hash[0..7]);
                     errors += 1;
                 }
                 Err(e) => {
@@ -135,17 +135,21 @@ pub fn audit(conn: &Connection) -> Result<(), sqlite::Error> {
     let total = errors + unsigned + valid;
     if errors > 0 {
         ko(format!("Audit has been detected {errors} commit's signature errors.").as_str());
+        println!();
         ko(format!(
             "Validated ({valid}/{total}) Unsigned ({unsigned}) Errors ({errors}) Total ({total})"
         )
         .as_str());
+        println!();
+        return Ok(false);
     } else {
         ok("Audit successfull");
+        println!();
         ok(format!(
             "Validated ({valid}/{total}) Unsigned ({unsigned}) Errors ({errors}) Total ({total})"
         )
         .as_str());
     }
     println!();
-    Ok(())
+    Ok(true)
 }
