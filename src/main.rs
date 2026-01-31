@@ -10,11 +10,11 @@ use crate::chat::list_messages;
 use crate::chat::send_message;
 use crate::db::{SILEX_INIT, connect_silex, get_current_branch};
 use crate::utils::ok;
-use crate::vcs::ls_tree;
 
 pub mod chat;
 pub mod db;
 pub mod todo;
+pub mod tree;
 pub mod utils;
 pub mod vcs;
 pub mod web;
@@ -254,7 +254,8 @@ fn main() -> Result<(), Error> {
     match app.subcommand() {
         Some(("new", _)) => new_project(),
         Some(("tree", _)) => {
-            ls_tree();
+            let current_dir = std::env::current_dir()?;
+            tree::scan_and_print_tree(&current_dir);
             Ok(())
         }
         Some(("status", _)) => check_status(),

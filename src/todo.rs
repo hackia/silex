@@ -53,7 +53,7 @@ pub fn list_todos(conn: &Connection) -> Result<(), Error> {
     if todos.is_empty() {
         ok("nothing here");
     } else {
-        println!("{}", Table::new(todos).to_string());
+        println!("{}", Table::new(todos));
     }
     Ok(())
 }

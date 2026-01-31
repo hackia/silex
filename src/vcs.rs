@@ -9,8 +9,6 @@ use similar::{ChangeTag, TextDiff};
 use sqlite::Connection;
 use sqlite::Error;
 use sqlite::State;
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
@@ -21,31 +19,6 @@ use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
 use tabled::{Table, Tabled};
 use uuid::Uuid;
-
-struct Node {
-    children: BTreeMap<String, Node>,
-}
-
-impl Node {
-    fn new() -> Self {
-        Node {
-            children: BTreeMap::new(),
-        }
-    }
-
-    // Fonction pour insérer un chemin "src/main.rs" dans l'arbre
-    fn insert(&mut self, path: &str) {
-        let parts: Vec<&str> = path.split('/').collect();
-        let mut current_node = self;
-
-        for part in parts {
-            current_node = current_node
-                .children
-                .entry(part.to_string())
-                .or_insert_with(Node::new);
-        }
-    }
-}
 
 #[derive(Tabled)]
 struct LogEntry {
@@ -605,7 +578,7 @@ pub fn log(conn: &Connection, page: usize, per_page: usize) -> Result<(), sqlite
         }
     } else {
         let x = logs.len();
-        println!("{}", Table::new(&logs).to_string());
+        println!("{}", Table::new(&logs));
         if x >= 120 {
             ok(format!(
                 "\nPage {page} ({}/{per_page} commits). Use --page {} for see the suite.",
@@ -641,58 +614,6 @@ pub fn files() -> Vec<String> {
         );
     }
     all
-}
-
-fn print_children(node: &Node, prefix: &str) {
-    // 1. On récupère les enfants dans un vecteur pour pouvoir les trier
-    let mut children_vec: Vec<_> = node.children.iter().collect();
-
-    // 2. LE TRI MAGIQUE : Dossiers d'abord, puis ordre alphabétique
-    children_vec.sort_by(|(name_a, node_a), (name_b, node_b)| {
-        // Est-ce que c'est un dossier ? (S'il a des enfants, c'est un dossier)
-        let a_is_dir = !node_a.children.is_empty();
-        let b_is_dir = !node_b.children.is_empty();
-
-        if a_is_dir && !b_is_dir {
-            Ordering::Less // A est un dossier, B non -> A passe avant
-        } else if !a_is_dir && b_is_dir {
-            Ordering::Greater // B est un dossier, A non -> B passe avant
-        } else {
-            name_a.cmp(name_b) // Sinon, tri alphabétique classique
-        }
-    });
-
-    let count = children_vec.len();
-
-    // 3. On itère sur notre vecteur trié
-    for (i, (name, child)) in children_vec.into_iter().enumerate() {
-        let is_last = i == count - 1;
-        let connector = if is_last { "└── " } else { "├── " };
-
-        println!("{}{}{}", prefix, connector, name);
-
-        let child_prefix = if is_last {
-            format!("{}    ", prefix)
-        } else {
-            format!("{}│   ", prefix)
-        };
-
-        print_children(child, &child_prefix);
-    }
-}
-
-pub fn ls_tree() {
-    let files = files(); // Ton Vec<String>
-    // 1. Construction de l'arbre (comme avant)
-    let mut root = Node::new();
-    for path in files {
-        root.insert(&path);
-    }
-    // 2. On affiche la racine MANUELLEMENT (sans préfixe, sans connecteur)
-    println!(".");
-
-    // 3. On lance la récursion pour le contenu, avec un préfixe vide ""
-    print_children(&root, "");
 }
 
 pub fn commit(conn: &Connection, message: &str, author: &str) -> Result<(), Error> {
