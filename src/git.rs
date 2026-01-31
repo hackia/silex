@@ -43,14 +43,17 @@ pub fn import_from_git(git_url: &str, target_dir: &Path) -> Result<(), Box<dyn s
         let tree = commit.tree()?;
 
         // Transaction pour optimiser la vitesse (indispensable)
+        // Dans src/git.rs (dans la boucle)
+
         conn.execute("BEGIN TRANSACTION")?;
 
         // 1. Création du Commit Silex
         let author = commit.author().name().unwrap_or("Unknown").to_string();
         let message = commit.message().unwrap_or("").to_string();
         let time = commit.time().seconds();
-
-        let silex_commit_id = vcs::commit_manual(&conn, &message, &author, time)?;
+        let original_git_hash = commit.id().to_string();
+        let full_message = format!("{}\n\n[Git-Import: {}]", message, original_git_hash);
+        let silex_commit_id = vcs::commit_manual(&conn, &full_message, &author, time)?;
 
         // 2. Parcours récursif de l'arbre Git
         walk_git_tree(&repo, &tree, "", &mut |path, content| {

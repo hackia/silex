@@ -116,28 +116,50 @@ pub fn checkout_head(conn: &Connection, root_path: &Path) -> Result<(), sqlite::
     ok("Clonned");
     Ok(())
 }
-// Version spéciale de commit qui accepte une date explicite et retourne l'ID du commit
+
+// Dans src/vcs.rs
+
 pub fn commit_manual(
     conn: &Connection,
     message: &str,
     author: &str,
     timestamp: i64,
 ) -> Result<i64, sqlite::Error> {
-    // Note: Pour faire simple ici, on ne calcule pas le hash parent/enfant complexe
-    // ni la signature crypto, car c'est un import massif.
-    // Dans une version prod, il faudrait recalculer le Merkle Hash ici.
+    // 1. On récupère le hash du dernier commit inséré (le parent) pour la chaîne cryptographique
+    // Cela permet de lier mathématiquement ce commit au précédent
+    let query_last = "SELECT hash FROM commits ORDER BY id DESC LIMIT 1";
+    let mut stmt_last = conn.prepare(query_last)?;
 
-    let dummy_hash = format!("git-import-{}", Uuid::new_v4()); // Hash temporaire
+    let parent_hash = if let Ok(State::Row) = stmt_last.next() {
+        stmt_last.read::<String, _>(0)?
+    } else {
+        String::from("") // Premier commit (Genesis)
+    };
 
-    let query = "INSERT INTO commits (hash, author, message, timestamp) VALUES (?, ?, ?, datetime(?, 'unixepoch'))";
+    // 2. CORRECTION : On calcule un VRAI hash Blake3
+    // On mélange : Parent + Auteur + Message + Date
+    let commit_data = format!("{}{}{}{}", parent_hash, author, message, timestamp);
+    let silex_hash = blake3::hash(commit_data.as_bytes()).to_hex().to_string();
+
+    // 3. Insertion propre
+    let query = "INSERT INTO commits (hash, parent_hash, author, message, timestamp) VALUES (?, ?, ?, ?, datetime(?, 'unixepoch'))";
     let mut stmt = conn.prepare(query)?;
-    stmt.bind((1, dummy_hash.as_str()))?;
-    stmt.bind((2, author))?;
-    stmt.bind((3, message))?;
-    stmt.bind((4, timestamp))?;
+
+    stmt.bind((1, silex_hash.as_str()))?; // On utilise le hash calculé
+
+    // On lie le parent (pour que l'arbre soit valide)
+    if parent_hash.is_empty() {
+        stmt.bind((2, Option::<&str>::None))?;
+    } else {
+        stmt.bind((2, Some(parent_hash.as_str())))?;
+    }
+
+    stmt.bind((3, author))?;
+    stmt.bind((4, message))?;
+    stmt.bind((5, timestamp))?;
     stmt.next()?;
 
-    // On récupère l'ID pour remplir le manifest juste après
+    // On retourne l'ID
     let id_query = "SELECT last_insert_rowid()";
     let mut stmt_id = conn.prepare(id_query)?;
     stmt_id.next()?;
@@ -358,17 +380,14 @@ pub fn create_branch(conn: &Connection, new_branch_name: &str) -> Result<(), Err
     Ok(())
 }
 
-// --- LE COEUR DU SYSTEME : CHECKOUT ---
-
-pub fn checkout(conn: &Connection, target_branch: &str) -> Result<(), Error> {
+pub fn checkout(conn: &Connection, target_ref: &str) -> Result<(), Error> {
     // 1. VÉRIFICATION DE SÉCURITÉ
-    // On ne veut pas écraser le travail en cours de l'utilisateur
     let current_dir = std::env::current_dir().unwrap();
-    let current_branch = get_current_branch(conn).expect("fialed to get current branch");
+    let current_branch = get_current_branch(conn).unwrap_or("DETACHED".to_string());
 
-    // Si on est déjà dessus, on ne fait rien
-    if current_branch == target_branch {
-        ok(&format!("Already on '{}'", target_branch));
+    // Si on est déjà dessus (et que ce n'est pas un checkout forcé sur un hash), on skip
+    if current_branch == target_ref {
+        ok(&format!("Already on '{target_ref}'"));
         return Ok(());
     }
 
@@ -379,24 +398,32 @@ pub fn checkout(conn: &Connection, target_branch: &str) -> Result<(), Error> {
         return Ok(());
     }
 
-    // 2. PRÉPARATION DES DONNÉES
-    // On récupère les IDs des commits (Source et Cible)
+    // 2. PRÉPARATION DES DONNÉES (C'est ici qu'on change la logique !)
     let (current_head_id, _) = get_branch_head_info(conn, &current_branch)?;
-    let (target_head_id, _) = get_branch_head_info(conn, target_branch)?;
 
-    // Si la branche cible n'existe pas
-    if target_head_id.is_none() && target_branch != "main" {
-        // Hack si repo vide
-        ok(format!("Branch '{target_branch}' not found.").as_str());
-        return Ok(());
+    // A. Est-ce une BRANCHE ?
+    let (branch_head_id, _) = get_branch_head_info(conn, target_ref)?;
+
+    // B. Sinon, est-ce un HASH (Time Travel) ?
+    let target_head_id = if branch_head_id.is_some() {
+        branch_head_id
+    } else {
+        get_commit_id_by_hash(conn, target_ref)?
+    };
+
+    // Si introuvable ni en branche, ni en commit
+    if target_head_id.is_none() {
+        return Err(Error {
+            code: Some(1),
+            message: Some(format!(
+                "Reference '{target_ref}' (branch or commit) not found."
+            )),
+        });
     }
-
     // On charge les deux manifestes en mémoire pour comparer
-    // Map : Chemin -> (Hash, AssetID)
     let current_files = get_manifest_map(conn, current_head_id)?;
     let target_files = get_manifest_map(conn, target_head_id)?;
-
-    ok(format!("Switched to branch '{target_branch}'").as_str());
+    ok(format!("Switched to branch '{target_ref}'").as_str());
 
     // 3. MISE À JOUR DU DISQUE (Différentiel)
 
@@ -427,15 +454,28 @@ pub fn checkout(conn: &Connection, target_branch: &str) -> Result<(), Error> {
     }
 
     // 4. METTRE À JOUR LA CONFIGURATION
-    let query = "UPDATE config SET value = ? WHERE key = 'current_branch'";
-    let mut stmt = conn.prepare(query)?;
-    stmt.bind((1, target_branch))?;
-    stmt.next()?;
+    // ... LE RESTE DE LA FONCTION (BOUCLES FOR) RESTE IDENTIQUE ...
+    // ... (Partie 3: MISE À JOUR DU DISQUE) ...
 
+    // 4. METTRE À JOUR LA CONFIGURATION (Ajustement final)
+    let query = "INSERT INTO config (key, value) VALUES ('current_branch', ?) 
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+    let mut stmt = conn.prepare(query)?;
+
+    if branch_head_id.is_some() {
+        // C'est une vraie branche
+        stmt.bind((1, target_ref))?;
+    } else {
+        ok(format!(
+            "You are in 'Detached HEAD' state (viewing commit {}).",
+            target_ref
+        )
+        .as_str());
+        stmt.bind((1, "DETACHED"))?;
+    }
+    stmt.next()?;
     Ok(())
 }
-
-// --- NOUVEAUX HELPERS ---
 
 // Récupère tout le manifeste d'un commit sous forme de HashMap facile à comparer
 fn get_manifest_map(
@@ -1022,4 +1062,17 @@ pub fn calculate_hash(path: &Path) -> IoResult<String> {
         hasher.update(&buffer[..count]);
     }
     Ok(hex::encode(hasher.finalize().as_bytes()))
+}
+
+fn get_commit_id_by_hash(conn: &Connection, partial_hash: &str) -> Result<Option<i64>, Error> {
+    // On cherche un hash qui COMMENCE par la chaîne donnée (LIKE 'abc%')
+    let query = "SELECT id FROM commits WHERE hash LIKE ? || '%' LIMIT 1";
+    let mut stmt = conn.prepare(query)?;
+    stmt.bind((1, partial_hash))?;
+
+    if let Ok(State::Row) = stmt.next() {
+        Ok(Some(stmt.read("id")?))
+    } else {
+        Ok(None)
+    }
 }
