@@ -31,6 +31,7 @@ fn cli() -> Command {
         .subcommand(
             Command::new("keygen").about("Generate Ed25519 identity keys for signing commits"),
         )
+        .subcommand(Command::new("audit").about("Verify integrity of commit signatures"))
         .subcommand(
             Command::new("log")
                 .about("Show commit logs")
@@ -299,6 +300,11 @@ fn main() -> Result<(), Error> {
                 },
                 _ => Ok(()),
             }
+        }
+        Some(("audit", _)) => {
+            let conn = connect_silex(Path::new(".")).expect("failed to connect to the databaase");
+            crypto::audit(&conn).expect("failed to audit");
+            Ok(())
         }
         Some(("commit", sub_matches)) => {
             if run_hooks().is_ok() {

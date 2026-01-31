@@ -14,6 +14,13 @@ pub fn ok(message: &str) {
         format!("\x1b[1;32m *\x1b[1;37m {message}\x1b[0m").as_str()
     );
 }
+
+pub fn ko(message: &str) {
+    println!(
+        "{}",
+        format!("\x1b[1;31m !\x1b[1;37m {message}\x1b[0m").as_str()
+    );
+}
 pub fn ok_status(verb: &FileStatus) {
     match verb {
         FileStatus::New(p) => {
@@ -52,6 +59,23 @@ pub fn ok_tag(tag: &str, description: &str, date: &str, _hash: &str) {
         Print(" ".repeat(padding as usize)),
         Print(" [ ".white().bold()),
         Print(date.green().bold()),
+        Print(" ]\n".white().bold()),
+    );
+}
+
+pub fn ok_audit_commit(hash: &str) {
+    let (x, _) = size().expect("failed to get term size");
+
+    let description = " Signature is valid ";
+    let padding = x - hash.len() as u16 - description.len() as u16 - 7;
+
+    let _ = execute!(
+        stdout(),
+        Print(" *".green().bold()),
+        Print(description),
+        Print(" ".repeat(padding as usize)),
+        Print(" [ ".white().bold()),
+        Print(hash.green().bold()),
         Print(" ]\n".white().bold()),
     );
 }
