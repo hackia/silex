@@ -13,6 +13,7 @@ complete -c silex -n __fish_use_subcommand -a feat -d 'Manage feature branches'
 complete -c silex -n __fish_use_subcommand -a hotfix -d 'Manage hotfix branches'
 complete -c silex -n __fish_use_subcommand -a tag -d 'Manage version tags'
 complete -c silex -n __fish_use_subcommand -a web -d 'Start the web interface'
+complete -c silex -n __fish_use_subcommand -a tree -d 'Print the repository tree interface'
 
 complete -c silex -n "__fish_seen_subcommand_from commit" -s m -l message -r -d 'Description of the changes'
 
@@ -30,7 +31,6 @@ complete -c silex -n "__fish_seen_subcommand_from tag; and not __fish_seen_subco
 complete -c silex -n "__fish_seen_subcommand_from tag; and __fish_seen_subcommand_from create" -s m -l message -r -d Description
 
 complete -c silex -s h -l help -d 'Print a short help text and exit'
-
 complete -c silex -n __fish_use_subcommand -a chat -d 'Internal messaging system'
 complete -c silex -n "__fish_seen_subcommand_from chat; and not __fish_seen_subcommand_from send list" -a "send list"
 
